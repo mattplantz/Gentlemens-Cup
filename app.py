@@ -27,7 +27,23 @@ HOLES = list(range(1, 19))  # 18 holes for Day 1
 DAY2_HOLES = list(range(1, 10))  # 9 holes for Day 2
 GROUPS = list(range(1, 6))  # 5 groups for Day 2
 
-# Google Sheets setup with full integration
+# Course information
+DAY1_COURSE = {
+    1: {'par': 4, 'yardage': 322}, 2: {'par': 4, 'yardage': 359}, 3: {'par': 3, 'yardage': 119},
+    4: {'par': 4, 'yardage': 361}, 5: {'par': 5, 'yardage': 486}, 6: {'par': 3, 'yardage': 197},
+    7: {'par': 5, 'yardage': 517}, 8: {'par': 4, 'yardage': 167}, 9: {'par': 4, 'yardage': 353},
+    10: {'par': 4, 'yardage': 284}, 11: {'par': 3, 'yardage': 192}, 12: {'par': 4, 'yardage': 326},
+    13: {'par': 5, 'yardage': 497}, 14: {'par': 4, 'yardage': 314}, 15: {'par': 3, 'yardage': 135},
+    16: {'par': 4, 'yardage': 322}, 17: {'par': 3, 'yardage': 308}, 18: {'par': 5, 'yardage': 424}
+}
+
+DAY2_COURSE = {
+    1: {'par': 4, 'yardage': 327}, 2: {'par': 3, 'yardage': 153}, 3: {'par': 5, 'yardage': 536},
+    4: {'par': 3, 'yardage': 135}, 5: {'par': 4, 'yardage': 434}, 6: {'par': 3, 'yardage': 167},
+    7: {'par': 4, 'yardage': 386}, 8: {'par': 5, 'yardage': 501}, 9: {'par': 4, 'yardage': 253}
+}
+
+# Google Sheets setup
 @st.cache_resource
 def init_google_sheets():
     """Initialize Google Sheets connection"""
@@ -52,7 +68,7 @@ def init_google_sheets():
         credentials = Credentials.from_service_account_info(credentials_dict, scopes=scope)
         client = gspread.authorize(credentials)
         
-        # Open the spreadsheet (you'll need to create this and share it with your service account)
+        # Open the spreadsheet
         try:
             spreadsheet = client.open("Gentlemens Cup Tournament Data")
             st.success(f"Successfully connected to spreadsheet: {spreadsheet.title}")
@@ -67,7 +83,6 @@ def init_google_sheets():
     
     except Exception as e:
         st.error(f"Error connecting to Google Sheets: {e}")
-        st.error("Using local session storage as fallback...")
         return None, None
 
 def setup_sheets_structure(spreadsheet):
@@ -82,7 +97,6 @@ def setup_sheets_structure(spreadsheet):
         except:
             st.info("Creating Day1_Scores sheet...")
             day1_sheet = spreadsheet.add_worksheet(title="Day1_Scores", rows="200", cols="10")
-            # Add headers
             day1_sheet.update('A1:F1', [['Team', 'Hole', 'Scramble_Score', 'Alt_Shot_Score', 'Timestamp', 'ID']])
             st.success("Created Day1_Scores sheet")
         
@@ -93,7 +107,6 @@ def setup_sheets_structure(spreadsheet):
         except:
             st.info("Creating Day2_Scores sheet...")
             day2_sheet = spreadsheet.add_worksheet(title="Day2_Scores", rows="500", cols="10")
-            # Add headers
             day2_sheet.update('A1:F1', [['Group', 'Hole', 'Team', 'Score', 'Timestamp', 'ID']])
             st.success("Created Day2_Scores sheet")
         
@@ -104,7 +117,6 @@ def setup_sheets_structure(spreadsheet):
         except:
             st.info("Creating Day2_Skins sheet...")
             skins_sheet = spreadsheet.add_worksheet(title="Day2_Skins", rows="200", cols="10")
-            # Add headers
             skins_sheet.update('A1:G1', [['Group', 'Hole', 'Winner', 'Winning_Score', 'Tied', 'Tied_Teams', 'ID']])
             st.success("Created Day2_Skins sheet")
         
@@ -113,7 +125,6 @@ def setup_sheets_structure(spreadsheet):
     
     except Exception as e:
         st.error(f"Error setting up sheets structure: {e}")
-        st.error("This might be a permissions issue. Check that your service account has Editor access.")
         return None, None, None
 
 def get_sheets():
@@ -129,67 +140,38 @@ def get_sheets():
             st.session_state.skins_sheet = skins_sheet
             st.session_state.using_sheets = True
         else:
-            st.session_state.using_sheets = False
-            # Initialize local storage as fallback
-            if 'day1_scores' not in st.session_state:
-                st.session_state.day1_scores = {}
-            if 'day2_scores' not in st.session_state:
-                st.session_state.day2_scores = {}
-            if 'day2_skins' not in st.session_state:
-                st.session_state.day2_skins = {}
+            st.error("❌ Google Sheets connection failed. Please check your configuration.")
+            st.stop()
     
     return st.session_state.get('using_sheets', False)
 
 def save_day1_score(team, hole, scramble_score, alt_shot_score):
-    """Save Day 1 scores"""
+    """Save Day 1 scores to Google Sheets"""
     timestamp = datetime.now().isoformat()
     score_id = f"{team}_{hole}"
     
-    if st.session_state.get('using_sheets', False):
-        try:
-            day1_sheet = st.session_state.day1_sheet
-            
-            # Check if score already exists
-            existing_data = day1_sheet.get_all_records()
-            existing_row = None
-            for i, record in enumerate(existing_data):
-                if record['Team'] == team and record['Hole'] == hole:
-                    existing_row = i + 2  # +2 because sheets are 1-indexed and we have headers
-                    break
-            
-            # Prepare data
-            row_data = [team, hole, scramble_score, alt_shot_score, timestamp, score_id]
-            
-            if existing_row:
-                # Update existing row
-                day1_sheet.update(f'A{existing_row}:F{existing_row}', [row_data])
-            else:
-                # Append new row
-                day1_sheet.append_row(row_data)
-            
-            # Also update local cache
-            st.session_state.day1_scores[score_id] = {
-                'team': team,
-                'hole': hole,
-                'scramble': scramble_score,
-                'alt_shot': alt_shot_score,
-                'timestamp': timestamp
-            }
-            
-        except Exception as e:
-            st.error(f"Error saving to Google Sheets: {e}")
-            # Fallback to local storage
-            if 'day1_scores' not in st.session_state:
-                st.session_state.day1_scores = {}
-            st.session_state.day1_scores[score_id] = {
-                'team': team,
-                'hole': hole,
-                'scramble': scramble_score,
-                'alt_shot': alt_shot_score,
-                'timestamp': timestamp
-            }
-    else:
-        # Local storage fallback
+    try:
+        day1_sheet = st.session_state.day1_sheet
+        
+        # Check if score already exists
+        existing_data = day1_sheet.get_all_records()
+        existing_row = None
+        for i, record in enumerate(existing_data):
+            if record['Team'] == team and record['Hole'] == hole:
+                existing_row = i + 2  # +2 because sheets are 1-indexed and we have headers
+                break
+        
+        # Prepare data
+        row_data = [team, hole, scramble_score, alt_shot_score, timestamp, score_id]
+        
+        if existing_row:
+            # Update existing row
+            day1_sheet.update(f'A{existing_row}:F{existing_row}', [row_data])
+        else:
+            # Append new row
+            day1_sheet.append_row(row_data)
+        
+        # Update local cache for UI responsiveness
         if 'day1_scores' not in st.session_state:
             st.session_state.day1_scores = {}
         st.session_state.day1_scores[score_id] = {
@@ -199,61 +181,39 @@ def save_day1_score(team, hole, scramble_score, alt_shot_score):
             'alt_shot': alt_shot_score,
             'timestamp': timestamp
         }
+        
+    except Exception as e:
+        st.error(f"Error saving to Google Sheets: {e}")
 
 def save_day2_score(group, hole, team, score):
-    """Save Day 2 scores"""
+    """Save Day 2 scores to Google Sheets"""
     timestamp = datetime.now().isoformat()
     score_id = f"{group}_{hole}_{team}"
     
-    if st.session_state.get('using_sheets', False):
-        try:
-            day2_sheet = st.session_state.day2_sheet
-            
-            # Check if score already exists
-            existing_data = day2_sheet.get_all_records()
-            existing_row = None
-            for i, record in enumerate(existing_data):
-                if (record['Group'] == group and 
-                    record['Hole'] == hole and 
-                    record['Team'] == team):
-                    existing_row = i + 2  # +2 because sheets are 1-indexed and we have headers
-                    break
-            
-            # Prepare data
-            row_data = [group, hole, team, score, timestamp, score_id]
-            
-            if existing_row:
-                # Update existing row
-                day2_sheet.update(f'A{existing_row}:F{existing_row}', [row_data])
-            else:
-                # Append new row
-                day2_sheet.append_row(row_data)
-            
-            # Also update local cache
-            if 'day2_scores' not in st.session_state:
-                st.session_state.day2_scores = {}
-            st.session_state.day2_scores[score_id] = {
-                'group': group,
-                'hole': hole,
-                'team': team,
-                'score': score,
-                'timestamp': timestamp
-            }
-            
-        except Exception as e:
-            st.error(f"Error saving to Google Sheets: {e}")
-            # Fallback to local storage
-            if 'day2_scores' not in st.session_state:
-                st.session_state.day2_scores = {}
-            st.session_state.day2_scores[score_id] = {
-                'group': group,
-                'hole': hole,
-                'team': team,
-                'score': score,
-                'timestamp': timestamp
-            }
-    else:
-        # Local storage fallback
+    try:
+        day2_sheet = st.session_state.day2_sheet
+        
+        # Check if score already exists
+        existing_data = day2_sheet.get_all_records()
+        existing_row = None
+        for i, record in enumerate(existing_data):
+            if (record['Group'] == group and 
+                record['Hole'] == hole and 
+                record['Team'] == team):
+                existing_row = i + 2  # +2 because sheets are 1-indexed and we have headers
+                break
+        
+        # Prepare data
+        row_data = [group, hole, team, score, timestamp, score_id]
+        
+        if existing_row:
+            # Update existing row
+            day2_sheet.update(f'A{existing_row}:F{existing_row}', [row_data])
+        else:
+            # Append new row
+            day2_sheet.append_row(row_data)
+        
+        # Update local cache for UI responsiveness
         if 'day2_scores' not in st.session_state:
             st.session_state.day2_scores = {}
         st.session_state.day2_scores[score_id] = {
@@ -263,41 +223,43 @@ def save_day2_score(group, hole, team, score):
             'score': score,
             'timestamp': timestamp
         }
+        
+    except Exception as e:
+        st.error(f"Error saving to Google Sheets: {e}")
     
-    # Calculate skins for this hole
-    calculate_skins(group, hole)
+    # Calculate skins for this hole with carryover logic
+    calculate_skins_with_carryover(group, hole)
 
-def save_skin_result(group, hole, winner, winning_score, tied, tied_teams=None):
+def save_skin_result(group, hole, winner, winning_score, tied, tied_teams=None, points_value=1):
     """Save skin calculation results to Google Sheets"""
-    if st.session_state.get('using_sheets', False):
-        try:
-            skins_sheet = st.session_state.skins_sheet
-            skin_id = f"{group}_{hole}"
+    try:
+        skins_sheet = st.session_state.skins_sheet
+        skin_id = f"{group}_{hole}"
+        
+        # Check if skin result already exists
+        existing_data = skins_sheet.get_all_records()
+        existing_row = None
+        for i, record in enumerate(existing_data):
+            if record['Group'] == group and record['Hole'] == hole:
+                existing_row = i + 2  # +2 because sheets are 1-indexed and we have headers
+                break
+        
+        # Prepare data - store points value in Tied_Teams field when there's a winner
+        tied_teams_str = ','.join(tied_teams) if tied_teams else str(points_value)
+        row_data = [group, hole, winner or '', winning_score, tied, tied_teams_str, skin_id]
+        
+        if existing_row:
+            # Update existing row
+            skins_sheet.update(f'A{existing_row}:G{existing_row}', [row_data])
+        else:
+            # Append new row
+            skins_sheet.append_row(row_data)
             
-            # Check if skin result already exists
-            existing_data = skins_sheet.get_all_records()
-            existing_row = None
-            for i, record in enumerate(existing_data):
-                if record['Group'] == group and record['Hole'] == hole:
-                    existing_row = i + 2  # +2 because sheets are 1-indexed and we have headers
-                    break
-            
-            # Prepare data
-            tied_teams_str = ','.join(tied_teams) if tied_teams else ''
-            row_data = [group, hole, winner or '', winning_score, tied, tied_teams_str, skin_id]
-            
-            if existing_row:
-                # Update existing row
-                skins_sheet.update(f'A{existing_row}:G{existing_row}', [row_data])
-            else:
-                # Append new row
-                skins_sheet.append_row(row_data)
-                
-        except Exception as e:
-            st.error(f"Error saving skin result to Google Sheets: {e}")
+    except Exception as e:
+        st.error(f"Error saving skin result to Google Sheets: {e}")
 
-def calculate_skins(group, hole):
-    """Calculate skins for a specific hole"""
+def calculate_skins_with_carryover(group, hole):
+    """Calculate skins with carryover logic for consecutive ties"""
     if 'day2_skins' not in st.session_state:
         st.session_state.day2_skins = {}
     
@@ -310,39 +272,75 @@ def calculate_skins(group, hole):
             if score and score > 0:  # Valid score
                 hole_scores[team] = score
     
+    # Need at least 2 scores to determine winner
+    if len(hole_scores) < 2:
+        return
+    
     # Determine winner (lowest score wins)
-    if len(hole_scores) >= 2:  # Need at least 2 scores to determine winner
-        min_score = min(hole_scores.values())
-        winners = [team for team, score in hole_scores.items() if score == min_score]
+    min_score = min(hole_scores.values())
+    winners = [team for team, score in hole_scores.items() if score == min_score]
+    
+    # Calculate points value based on carryover
+    points_value = calculate_hole_points_value(group, hole)
+    
+    skin_key = f"{group}_{hole}"
+    
+    if len(winners) == 1:  # Clear winner
+        winner = winners[0]
+        skin_result = {
+            'group': group,
+            'hole': hole,
+            'winner': winner,
+            'score': min_score,
+            'tied': False,
+            'points_value': points_value
+        }
+        st.session_state.day2_skins[skin_key] = skin_result
+        save_skin_result(group, hole, winner, min_score, False, None, points_value)
         
-        skin_key = f"{group}_{hole}"
-        if len(winners) == 1:  # Clear winner
-            skin_result = {
-                'group': group,
-                'hole': hole,
-                'winner': winners[0],
-                'score': min_score,
-                'tied': False
-            }
-            st.session_state.day2_skins[skin_key] = skin_result
-            save_skin_result(group, hole, winners[0], min_score, False)
-        else:  # Tie
-            skin_result = {
-                'group': group,
-                'hole': hole,
-                'winner': None,
-                'score': min_score,
-                'tied': True,
-                'tied_teams': winners
-            }
-            st.session_state.day2_skins[skin_key] = skin_result
-            save_skin_result(group, hole, None, min_score, True, winners)
+        # Award points to the winning team immediately
+        update_team_points(winner, points_value)
+        
+    else:  # Tie - skin carries over
+        skin_result = {
+            'group': group,
+            'hole': hole,
+            'winner': None,
+            'score': min_score,
+            'tied': True,
+            'tied_teams': winners,
+            'points_value': points_value
+        }
+        st.session_state.day2_skins[skin_key] = skin_result
+        save_skin_result(group, hole, None, min_score, True, winners, points_value)
+
+def calculate_hole_points_value(group, hole):
+    """Calculate points value for a hole based on carryover from previous ties"""
+    points_value = 1  # Base value
+    
+    # Look backwards from current hole to count consecutive ties
+    for prev_hole in range(hole - 1, 0, -1):  # Go backwards from hole-1 to 1
+        prev_skin_key = f"{group}_{prev_hole}"
+        if prev_skin_key in st.session_state.day2_skins:
+            prev_skin = st.session_state.day2_skins[prev_skin_key]
+            if prev_skin['tied']:
+                points_value += 1  # Add 1 for each consecutive tie
+            else:
+                break  # Stop at first non-tie
+        else:
+            break  # Stop if no data for previous hole
+    
+    return points_value
+
+def update_team_points(team, points):
+    """Update team points in session state for immediate leaderboard updates"""
+    if 'team_day2_points' not in st.session_state:
+        st.session_state.team_day2_points = {team: 0 for team in TEAMS}
+    
+    st.session_state.team_day2_points[team] = st.session_state.team_day2_points.get(team, 0) + points
 
 def load_data_from_sheets():
     """Load all data from Google Sheets into session state"""
-    if not st.session_state.get('using_sheets', False):
-        return
-    
     try:
         # Load Day 1 scores
         day1_data = st.session_state.day1_sheet.get_all_records()
@@ -372,23 +370,44 @@ def load_data_from_sheets():
                     'timestamp': record.get('Timestamp', '')
                 }
         
-        # Load Day 2 skins
+        # Load Day 2 skins and recalculate team points
         skins_data = st.session_state.skins_sheet.get_all_records()
         st.session_state.day2_skins = {}
+        st.session_state.team_day2_points = {team: 0 for team in TEAMS}
+        
         for record in skins_data:
             if record['Group'] and record['Hole']:  # Valid record
                 key = f"{record['Group']}_{record['Hole']}"
-                tied_teams = record.get('Tied_Teams', '').split(',') if record.get('Tied_Teams') else []
-                st.session_state.day2_skins[key] = {
+                tied_teams_or_points = record.get('Tied_Teams', '')
+                
+                if record.get('Tied', False):
+                    # This was a tie
+                    tied_teams = tied_teams_or_points.split(',') if tied_teams_or_points else []
+                    points_value = 1  # Default, will be recalculated
+                else:
+                    # This was a win
+                    tied_teams = []
+                    try:
+                        points_value = int(tied_teams_or_points) if tied_teams_or_points else 1
+                    except (ValueError, TypeError):
+                        points_value = 1
+                
+                skin_result = {
                     'group': record['Group'],
                     'hole': record['Hole'],
                     'winner': record.get('Winner') or None,
                     'score': record.get('Winning_Score'),
                     'tied': record.get('Tied', False),
-                    'tied_teams': tied_teams if tied_teams != [''] else []
+                    'tied_teams': tied_teams if tied_teams != [''] else [],
+                    'points_value': points_value
                 }
+                st.session_state.day2_skins[key] = skin_result
+                
+                # Add points to winning team
+                if skin_result['winner'] and not skin_result['tied']:
+                    st.session_state.team_day2_points[skin_result['winner']] += points_value
         
-        # CRITICAL: Recalculate any missing skins after loading data
+        # Recalculate any missing skins
         recalculate_missing_skins()
         
     except Exception as e:
@@ -410,40 +429,56 @@ def recalculate_missing_skins():
         skin_key = f"{group}_{hole}"
         if skin_key not in st.session_state.day2_skins:
             # This hole has scores but no skin result - calculate it
-            calculate_skins(group, hole)
+            calculate_skins_with_carryover(group, hole)
 
 def get_day1_scores():
     """Get all Day 1 scores"""
-    # Load fresh data from sheets if available
-    if st.session_state.get('using_sheets', False):
-        load_data_from_sheets()
-    
+    load_data_from_sheets()
     return st.session_state.get('day1_scores', {})
 
 def get_day2_scores():
     """Get all Day 2 scores"""
-    # Load fresh data from sheets if available
-    if st.session_state.get('using_sheets', False):
-        load_data_from_sheets()
-    
+    load_data_from_sheets()
     return st.session_state.get('day2_scores', {})
 
 def calculate_day1_points():
-    """Calculate Day 1 points for scramble and alternating shot competitions"""
+    """Calculate Day 1 points and current standings"""
     day1_scores = get_day1_scores()
     
     # Initialize team totals
-    team_totals = {team: {'scramble': 0, 'alt_shot': 0, 'holes_completed': 0} for team in TEAMS}
+    team_totals = {team: {'scramble': 0, 'alt_shot': 0, 'holes_completed': 0, 'scramble_to_par': 0, 'alt_shot_to_par': 0} for team in TEAMS}
+    
+    # Calculate par total for 18 holes
+    total_par = sum(DAY1_COURSE[hole]['par'] for hole in range(1, 19))
     
     # Sum up scores for each team
     for score_data in day1_scores.values():
         team = score_data['team']
+        hole = score_data['hole']
         if score_data['scramble'] and score_data['alt_shot']:
             team_totals[team]['scramble'] += score_data['scramble']
             team_totals[team]['alt_shot'] += score_data['alt_shot']
             team_totals[team]['holes_completed'] += 1
+            
+            # Calculate to par for individual holes
+            hole_par = DAY1_COURSE[hole]['par']
+            team_totals[team]['scramble_to_par'] += (score_data['scramble'] - hole_par)
+            team_totals[team]['alt_shot_to_par'] += (score_data['alt_shot'] - hole_par)
     
-    # Only rank teams that have completed all 18 holes
+    # Calculate current to-par for incomplete rounds
+    for team in TEAMS:
+        holes_played = team_totals[team]['holes_completed']
+        if holes_played > 0 and holes_played < 18:
+            # Current to par based on holes played
+            par_for_holes_played = sum(DAY1_COURSE[hole]['par'] for hole in range(1, holes_played + 1))
+            team_totals[team]['scramble_to_par'] = team_totals[team]['scramble'] - par_for_holes_played
+            team_totals[team]['alt_shot_to_par'] = team_totals[team]['alt_shot'] - par_for_holes_played
+        elif holes_played == 18:
+            # Full round to par
+            team_totals[team]['scramble_to_par'] = team_totals[team]['scramble'] - total_par
+            team_totals[team]['alt_shot_to_par'] = team_totals[team]['alt_shot'] - total_par
+    
+    # Only award points to teams that have completed all 18 holes
     complete_teams = [team for team in TEAMS if team_totals[team]['holes_completed'] == 18]
     
     def award_points_with_ties(scores_dict, point_values=[11, 7.5, 4]):
@@ -486,50 +521,60 @@ def calculate_day1_points():
         
         return points_awarded
     
-    # Calculate points for scramble competition
-    scramble_scores = {team: data['scramble'] for team, data in team_totals.items() if team in complete_teams}
-    scramble_points = award_points_with_ties(scramble_scores)
-    
-    # Calculate points for alternating shot competition
-    alt_shot_scores = {team: data['alt_shot'] for team, data in team_totals.items() if team in complete_teams}
-    alt_shot_points = award_points_with_ties(alt_shot_scores)
+    # Only award points if ALL teams have completed Day 1
+    if len(complete_teams) == len(TEAMS):
+        # Calculate points for scramble competition
+        scramble_scores = {team: data['scramble'] for team, data in team_totals.items()}
+        scramble_points = award_points_with_ties(scramble_scores)
+        
+        # Calculate points for alternating shot competition
+        alt_shot_scores = {team: data['alt_shot'] for team, data in team_totals.items()}
+        alt_shot_points = award_points_with_ties(alt_shot_scores)
+    else:
+        scramble_points = {}
+        alt_shot_points = {}
     
     return {
         'scramble_points': scramble_points,
         'alt_shot_points': alt_shot_points,
         'team_totals': team_totals,
-        'complete_teams': complete_teams
+        'complete_teams': complete_teams,
+        'all_teams_complete': len(complete_teams) == len(TEAMS)
     }
 
 def calculate_leaderboard():
     """Calculate current team standings"""
     team_points = {team: 0 for team in TEAMS}
     
-    # Day 1 points
+    # Day 1 points (only if all teams complete)
     day1_results = calculate_day1_points()
-    scramble_points = day1_results['scramble_points']
-    alt_shot_points = day1_results['alt_shot_points']
-    
-    # Add Day 1 points
-    for team in TEAMS:
-        team_points[team] += scramble_points.get(team, 0)
-        team_points[team] += alt_shot_points.get(team, 0)
+    if day1_results['all_teams_complete']:
+        scramble_points = day1_results['scramble_points']
+        alt_shot_points = day1_results['alt_shot_points']
+        
+        # Add Day 1 points
+        for team in TEAMS:
+            team_points[team] += scramble_points.get(team, 0)
+            team_points[team] += alt_shot_points.get(team, 0)
     
     # Day 2 points (skins) - ensure we have fresh data and calculations
-    if st.session_state.get('using_sheets', False):
-        load_data_from_sheets()  # This now includes recalculate_missing_skins()
-    else:
-        # For local storage, ensure skins are calculated
-        recalculate_missing_skins()
+    load_data_from_sheets()
     
-    if 'day2_skins' not in st.session_state:
-        st.session_state.day2_skins = {}
-    
-    for skin_data in st.session_state.day2_skins.values():
-        if skin_data['winner'] and not skin_data['tied']:
-            team_points[skin_data['winner']] += 1
+    # Add Day 2 skins points
+    day2_points = st.session_state.get('team_day2_points', {team: 0 for team in TEAMS})
+    for team in TEAMS:
+        team_points[team] += day2_points.get(team, 0)
     
     return team_points, day1_results
+
+def format_score_to_par(score_to_par):
+    """Format score to par display"""
+    if score_to_par == 0:
+        return "E"
+    elif score_to_par > 0:
+        return f"+{score_to_par}"
+    else:
+        return str(score_to_par)
 
 def login_page():
     """Display login page"""
@@ -557,27 +602,38 @@ def day1_scoring_page():
         selected_hole = st.selectbox("Select Hole:", HOLES)
     
     with col2:
+        # Display hole information
+        hole_info = DAY1_COURSE[selected_hole]
         st.markdown(f"### {selected_team} - Hole {selected_hole}")
+        st.markdown(f"**Par {hole_info['par']} • {hole_info['yardage']} yards**")
         
         # Get existing scores
         key = f"{selected_team}_{selected_hole}"
-        existing_scores = st.session_state.day1_scores.get(key, {})
+        existing_scores = st.session_state.get('day1_scores', {}).get(key, {})
         
-        scramble_score = st.number_input(
-            "Scramble Score:", 
-            min_value=1, 
-            max_value=15, 
-            value=existing_scores.get('scramble', 4),
-            key=f"scramble_{selected_team}_{selected_hole}"
-        )
+        col2a, col2b = st.columns(2)
         
-        alt_shot_score = st.number_input(
-            "Alternating Shot Score:", 
-            min_value=1, 
-            max_value=15, 
-            value=existing_scores.get('alt_shot', 4),
-            key=f"alt_shot_{selected_team}_{selected_hole}"
-        )
+        with col2a:
+            scramble_score = st.number_input(
+                "Scramble Score:", 
+                min_value=1, 
+                max_value=15, 
+                value=existing_scores.get('scramble', hole_info['par']),
+                key=f"scramble_{selected_team}_{selected_hole}"
+            )
+            scramble_to_par = scramble_score - hole_info['par']
+            st.markdown(f"To Par: **{format_score_to_par(scramble_to_par)}**")
+        
+        with col2b:
+            alt_shot_score = st.number_input(
+                "Alternating Shot Score:", 
+                min_value=1, 
+                max_value=15, 
+                value=existing_scores.get('alt_shot', hole_info['par']),
+                key=f"alt_shot_{selected_team}_{selected_hole}"
+            )
+            alt_shot_to_par = alt_shot_score - hole_info['par']
+            st.markdown(f"To Par: **{format_score_to_par(alt_shot_to_par)}**")
         
         if st.button("Save Scores", key=f"save_{selected_team}_{selected_hole}"):
             save_day1_score(selected_team, selected_hole, scramble_score, alt_shot_score)
@@ -588,14 +644,34 @@ def day1_scoring_page():
     # Display current scores for selected team
     st.markdown("### Current Scores")
     day1_scores = get_day1_scores()
-    team_scores = [(data['hole'], data['scramble'], data['alt_shot']) 
+    team_scores = [(data['hole'], data['scramble'], data['alt_shot'], 
+                   DAY1_COURSE[data['hole']]['par'],
+                   data['scramble'] - DAY1_COURSE[data['hole']]['par'],
+                   data['alt_shot'] - DAY1_COURSE[data['hole']]['par']) 
                    for data in day1_scores.values() 
                    if data['team'] == selected_team]
     
     if team_scores:
         team_scores.sort(key=lambda x: x[0])  # Sort by hole number
-        df = pd.DataFrame(team_scores, columns=['Hole', 'Scramble', 'Alt Shot'])
+        df = pd.DataFrame(team_scores, columns=['Hole', 'Scramble', 'Alt Shot', 'Par', 'Scramble To Par', 'Alt Shot To Par'])
+        df['Scramble To Par'] = df['Scramble To Par'].apply(format_score_to_par)
+        df['Alt Shot To Par'] = df['Alt Shot To Par'].apply(format_score_to_par)
         st.dataframe(df, use_container_width=True)
+        
+        # Show running totals
+        st.markdown("### Running Totals")
+        scramble_total = sum(score[1] for score in team_scores)
+        alt_shot_total = sum(score[2] for score in team_scores)
+        holes_played = len(team_scores)
+        par_total = sum(score[3] for score in team_scores)
+        
+        col1, col2, col3 = st.columns(3)
+        with col1:
+            st.metric("Holes Completed", f"{holes_played}/18")
+        with col2:
+            st.metric("Scramble Total", f"{scramble_total} ({format_score_to_par(scramble_total - par_total)})")
+        with col3:
+            st.metric("Alt Shot Total", f"{alt_shot_total} ({format_score_to_par(alt_shot_total - par_total)})")
     else:
         st.info(f"No scores entered yet for {selected_team}")
 
@@ -611,21 +687,34 @@ def day2_scoring_page():
         selected_hole = st.selectbox("Select Hole:", DAY2_HOLES, key="day2_hole")
     
     with col2:
+        # Display hole information
+        hole_info = DAY2_COURSE[selected_hole]
+        points_value = calculate_hole_points_value(selected_group, selected_hole)
+        
         st.markdown(f"### Group {selected_group} - Hole {selected_hole}")
+        st.markdown(f"**Par {hole_info['par']} • {hole_info['yardage']} yards**")
+        if points_value > 1:
+            st.markdown(f"**🔥 Worth {points_value} points (carryover from ties!)**")
+        else:
+            st.markdown(f"**Worth {points_value} point**")
         
         # Score inputs for each team
         scores = {}
-        for team in TEAMS:
+        cols = st.columns(3)
+        for i, team in enumerate(TEAMS):
             key = f"{selected_group}_{selected_hole}_{team}"
-            existing_score = st.session_state.day2_scores.get(key, {}).get('score', 4)
+            existing_score = st.session_state.get('day2_scores', {}).get(key, {}).get('score', hole_info['par'])
             
-            scores[team] = st.number_input(
-                f"{team} Score:", 
-                min_value=1, 
-                max_value=15, 
-                value=existing_score,
-                key=f"score_{selected_group}_{selected_hole}_{team}"
-            )
+            with cols[i]:
+                scores[team] = st.number_input(
+                    f"{team} Score:", 
+                    min_value=1, 
+                    max_value=15, 
+                    value=existing_score,
+                    key=f"score_{selected_group}_{selected_hole}_{team}"
+                )
+                team_to_par = scores[team] - hole_info['par']
+                st.markdown(f"To Par: **{format_score_to_par(team_to_par)}**")
         
         if st.button("Save Scores", key=f"save_day2_{selected_group}_{selected_hole}"):
             for team, score in scores.items():
@@ -636,12 +725,13 @@ def day2_scoring_page():
         
         # Show skin winner for this hole
         skin_key = f"{selected_group}_{selected_hole}"
-        if skin_key in st.session_state.day2_skins:
+        if skin_key in st.session_state.get('day2_skins', {}):
             skin_info = st.session_state.day2_skins[skin_key]
             if skin_info['tied']:
-                st.warning(f"Hole {selected_hole}: TIE - Skin carries over")
+                st.warning(f"🤝 Hole {selected_hole}: TIE - Skin carries over to next hole!")
+                st.markdown(f"Tied teams: {', '.join(skin_info.get('tied_teams', []))}")
             else:
-                st.success(f"Hole {selected_hole}: {skin_info['winner']} wins the skin!")
+                st.success(f"🏆 Hole {selected_hole}: **{skin_info['winner']}** wins {skin_info.get('points_value', 1)} point(s)!")
     
     # Display group scorecard
     st.markdown(f"### Group {selected_group} Scorecard")
@@ -651,23 +741,32 @@ def display_group_scorecard(group):
     """Display scorecard for a specific group"""
     scorecard_data = []
     
-    for hole in DAY2_HOLES:  # Use DAY2_HOLES instead of HOLES
-        hole_data = {'Hole': hole}
+    for hole in DAY2_HOLES:
+        hole_data = {'Hole': hole, 'Par': DAY2_COURSE[hole]['par']}
+        
+        # Add scores for each team
         for team in TEAMS:
             key = f"{group}_{hole}_{team}"
-            score = st.session_state.day2_scores.get(key, {}).get('score', '-')
-            hole_data[team] = score
+            score = st.session_state.get('day2_scores', {}).get(key, {}).get('score', '-')
+            if score != '-':
+                to_par = score - DAY2_COURSE[hole]['par']
+                hole_data[team] = f"{score} ({format_score_to_par(to_par)})"
+            else:
+                hole_data[team] = '-'
         
-        # Add skin winner
+        # Add skin winner and points
         skin_key = f"{group}_{hole}"
-        if skin_key in st.session_state.day2_skins:
+        if skin_key in st.session_state.get('day2_skins', {}):
             skin_info = st.session_state.day2_skins[skin_key]
             if skin_info['tied']:
                 hole_data['Skin Winner'] = 'TIE'
+                hole_data['Points'] = f"{skin_info.get('points_value', 1)} (carry)"
             else:
                 hole_data['Skin Winner'] = skin_info['winner']
+                hole_data['Points'] = skin_info.get('points_value', 1)
         else:
             hole_data['Skin Winner'] = '-'
+            hole_data['Points'] = '-'
         
         scorecard_data.append(hole_data)
     
@@ -689,16 +788,18 @@ def leaderboard_page():
         st.markdown("### Overall Team Standings")
         leaderboard_data = []
         for team in TEAMS:
-            day1_scramble = day1_results['scramble_points'].get(team, 0)
-            day1_alt_shot = day1_results['alt_shot_points'].get(team, 0)
-            day1_total = day1_scramble + day1_alt_shot
+            if day1_results['all_teams_complete']:
+                day1_scramble = day1_results['scramble_points'].get(team, 0)
+                day1_alt_shot = day1_results['alt_shot_points'].get(team, 0)
+                day1_total = day1_scramble + day1_alt_shot
+            else:
+                day1_total = 0
             
-            day2_skins = sum(1 for skin in st.session_state.day2_skins.values() 
-                            if skin.get('winner') == team and not skin.get('tied'))
+            day2_skins = st.session_state.get('team_day2_points', {}).get(team, 0)
             
             leaderboard_data.append({
                 'Team': team,
-                'Day 1 Points': f"{day1_total:.1f}",
+                'Day 1 Points': f"{day1_total:.1f}" if day1_total > 0 else "Pending",
                 'Day 2 Skins': day2_skins,
                 'Total Points': f"{team_points[team]:.1f}"
             })
@@ -708,95 +809,89 @@ def leaderboard_page():
         df_leaderboard = pd.DataFrame(leaderboard_data)
         st.dataframe(df_leaderboard, use_container_width=True)
         
-        # Day 1 Detailed Results
+        if not day1_results['all_teams_complete']:
+            st.info("⏳ Day 1 points will be awarded once all teams complete their rounds")
+        
+        # Day 1 Current Standings (always show)
+        st.markdown("### Day 1 Current Standings")
         col1, col2 = st.columns(2)
         
         with col1:
-            st.markdown("### Day 1 - Scramble Competition")
-            if day1_results['complete_teams']:
-                scramble_data = []
-                for team in TEAMS:
-                    if team in day1_results['complete_teams']:
-                        total_score = day1_results['team_totals'][team]['scramble']
-                        points = day1_results['scramble_points'].get(team, 0)
-                        scramble_data.append({
-                            'Team': team,
-                            'Total Score': total_score,
-                            'Points': f"{points:.1f}"
-                        })
-                
-                # Sort by score (lowest first)
-                scramble_data.sort(key=lambda x: x['Total Score'])
-                df_scramble = pd.DataFrame(scramble_data)
-                st.dataframe(df_scramble, use_container_width=True)
-            else:
-                st.info("No completed rounds yet")
+            st.markdown("#### Scramble Competition")
+            scramble_data = []
+            for team in TEAMS:
+                team_data = day1_results['team_totals'][team]
+                holes_played = team_data['holes_completed']
+                if holes_played > 0:
+                    total_score = team_data['scramble']
+                    to_par = team_data['scramble_to_par']
+                    scramble_data.append({
+                        'Team': team,
+                        'Score': f"{total_score} ({format_score_to_par(to_par)})",
+                        'Holes': f"{holes_played}/18"
+                    })
+                else:
+                    scramble_data.append({
+                        'Team': team,
+                        'Score': 'No scores',
+                        'Holes': '0/18'
+                    })
+            
+            # Sort by to par (best first) for teams with same holes played
+            scramble_data.sort(key=lambda x: (
+                -int(x['Holes'].split('/')[0]),  # More holes played first
+                int(x['Score'].split(' (')[0]) if x['Score'] != 'No scores' else 999  # Lower score first
+            ))
+            df_scramble = pd.DataFrame(scramble_data)
+            st.dataframe(df_scramble, use_container_width=True)
         
         with col2:
-            st.markdown("### Day 1 - Alternating Shot Competition")
-            if day1_results['complete_teams']:
-                alt_shot_data = []
-                for team in TEAMS:
-                    if team in day1_results['complete_teams']:
-                        total_score = day1_results['team_totals'][team]['alt_shot']
-                        points = day1_results['alt_shot_points'].get(team, 0)
-                        alt_shot_data.append({
-                            'Team': team,
-                            'Total Score': total_score,
-                            'Points': f"{points:.1f}"
-                        })
-                
-                # Sort by score (lowest first)
-                alt_shot_data.sort(key=lambda x: x['Total Score'])
-                df_alt_shot = pd.DataFrame(alt_shot_data)
-                st.dataframe(df_alt_shot, use_container_width=True)
-            else:
-                st.info("No completed rounds yet")
-        
-        # Day 1 Progress with Running Scores
-        st.markdown("### Day 1 Progress & Running Scores")
-        progress_data = []
-        for team in TEAMS:
-            holes_played = day1_results['team_totals'][team]['holes_completed']
-            scramble_total = day1_results['team_totals'][team]['scramble']
-            alt_shot_total = day1_results['team_totals'][team]['alt_shot']
+            st.markdown("#### Alternating Shot Competition")
+            alt_shot_data = []
+            for team in TEAMS:
+                team_data = day1_results['team_totals'][team]
+                holes_played = team_data['holes_completed']
+                if holes_played > 0:
+                    total_score = team_data['alt_shot']
+                    to_par = team_data['alt_shot_to_par']
+                    alt_shot_data.append({
+                        'Team': team,
+                        'Score': f"{total_score} ({format_score_to_par(to_par)})",
+                        'Holes': f"{holes_played}/18"
+                    })
+                else:
+                    alt_shot_data.append({
+                        'Team': team,
+                        'Score': 'No scores',
+                        'Holes': '0/18'
+                    })
             
-            # Format running scores
-            if holes_played > 0:
-                scramble_display = f"{scramble_total} ({holes_played} holes)"
-                alt_shot_display = f"{alt_shot_total} ({holes_played} holes)"
-            else:
-                scramble_display = "No scores"
-                alt_shot_display = "No scores"
-            
-            progress_data.append({
-                'Team': team,
-                'Holes Completed': f"{holes_played}/18",
-                'Scramble Running Total': scramble_display,
-                'Alt Shot Running Total': alt_shot_display,
-                'Status': "✅ Complete" if holes_played == 18 else f"🏌️ In Progress ({holes_played}/18)"
-            })
-        
-        df_progress = pd.DataFrame(progress_data)
-        st.dataframe(df_progress, use_container_width=True)
+            # Sort by to par (best first) for teams with same holes played
+            alt_shot_data.sort(key=lambda x: (
+                -int(x['Holes'].split('/')[0]),  # More holes played first
+                int(x['Score'].split(' (')[0]) if x['Score'] != 'No scores' else 999  # Lower score first
+            ))
+            df_alt_shot = pd.DataFrame(alt_shot_data)
+            st.dataframe(df_alt_shot, use_container_width=True)
         
         # Day 2 Summary
         st.markdown("### Day 2 Skins Summary")
         skins_summary = []
         for group in GROUPS:
-            skins_played = sum(1 for key in st.session_state.day2_skins.keys() 
+            skins_played = sum(1 for key in st.session_state.get('day2_skins', {}).keys() 
                               if key.startswith(f"{group}_"))
             group_skins = {team: 0 for team in TEAMS}
             
-            for skin_data in st.session_state.day2_skins.values():
+            for skin_data in st.session_state.get('day2_skins', {}).values():
                 if (skin_data['group'] == group and 
                     skin_data['winner'] and 
                     not skin_data['tied']):
-                    group_skins[skin_data['winner']] += 1
+                    points = skin_data.get('points_value', 1)
+                    group_skins[skin_data['winner']] += points
             
             skins_summary.append({
                 'Group': f"Group {group}",
-                'Holes Played': f"{skins_played}/9",  # Changed from 18 to 9
+                'Holes Played': f"{skins_played}/9",
                 'Young Guns': group_skins['Young Guns'],
                 'OGs': group_skins['OGs'],
                 'Mids': group_skins['Mids']
@@ -831,7 +926,8 @@ def main():
     if using_sheets:
         st.sidebar.success("✅ Connected to Google Sheets")
     else:
-        st.sidebar.warning("⚠️ Using local storage (data will reset on restart)")
+        st.sidebar.error("❌ Google Sheets connection required")
+        return
     
     # Check authentication
     if 'authenticated' not in st.session_state:
