@@ -117,7 +117,7 @@ def setup_sheets_structure(spreadsheet):
         except:
             st.info("Creating Day2_Skins sheet...")
             skins_sheet = spreadsheet.add_worksheet(title="Day2_Skins", rows="200", cols="10")
-            skins_sheet.update('A1:G1', [['Group', 'Hole', 'Winner', 'Winning_Score', 'Tied', 'Tied_Teams', 'ID']])
+            skins_sheet.update('A1:F1', [['Group', 'Hole', 'Winner', 'Winning_Score', 'Points_Value', 'ID']])
             st.success("Created Day2_Skins sheet")
         
         st.success("✅ All sheets setup successfully!")
@@ -230,7 +230,7 @@ def save_day2_score(group, hole, team, score):
     # Calculate skins for this hole with carryover logic
     calculate_skins_with_carryover(group, hole)
 
-def save_skin_result(group, hole, winner, winning_score, tied, tied_teams=None, points_value=1):
+def save_skin_result(group, hole, winner, winning_score, points_value):
     """Save skin calculation results to Google Sheets"""
     try:
         skins_sheet = st.session_state.skins_sheet
@@ -244,16 +244,19 @@ def save_skin_result(group, hole, winner, winning_score, tied, tied_teams=None, 
                 existing_row = i + 2  # +2 because sheets are 1-indexed and we have headers
                 break
         
-        # Prepare data - store points value in Tied_Teams field when there's a winner
-        tied_teams_str = ','.join(tied_teams) if tied_teams else str(points_value)
-        row_data = [group, hole, winner or '', winning_score, tied, tied_teams_str, skin_id]
-        
-        if existing_row:
-            # Update existing row
-            skins_sheet.update(f'A{existing_row}:G{existing_row}', [row_data])
-        else:
-            # Append new row
-            skins_sheet.append_row(row_data)
+        # Only save if there's a winner (no ties saved to sheets)
+        if winner:
+            row_data = [group, hole, winner, winning_score, points_value, skin_id]
+            
+            if existing_row:
+                # Update existing row
+                skins_sheet.update(f'A{existing_row}:F{existing_row}', [row_data])
+            else:
+                # Append new row
+                skins_sheet.append_row(row_data)
+        elif existing_row:
+            # If this was previously a win but now it's a tie, delete the row
+            skins_sheet.delete_rows(existing_row)
             
     except Exception as e:
         st.error(f"Error saving skin result to Google Sheets: {e}")
@@ -296,7 +299,7 @@ def calculate_skins_with_carryover(group, hole):
             'points_value': points_value
         }
         st.session_state.day2_skins[skin_key] = skin_result
-        save_skin_result(group, hole, winner, min_score, False, None, points_value)
+        save_skin_result(group, hole, winner, min_score, points_value)
         
         # Award points to the winning team immediately
         update_team_points(winner, points_value)
@@ -308,11 +311,10 @@ def calculate_skins_with_carryover(group, hole):
             'winner': None,
             'score': min_score,
             'tied': True,
-            'tied_teams': winners,
             'points_value': points_value
         }
         st.session_state.day2_skins[skin_key] = skin_result
-        save_skin_result(group, hole, None, min_score, True, winners, points_value)
+        # Don't save ties to Google Sheets - we only care about wins
 
 def calculate_hole_points_value(group, hole):
     """Calculate points value for a hole based on carryover from previous ties"""
@@ -375,37 +377,24 @@ def load_data_from_sheets():
         st.session_state.day2_skins = {}
         st.session_state.team_day2_points = {team: 0 for team in TEAMS}
         
+        # First, load all the wins from Google Sheets
         for record in skins_data:
-            if record['Group'] and record['Hole']:  # Valid record
+            if record['Group'] and record['Hole'] and record.get('Winner'):  # Only load records with winners
                 key = f"{record['Group']}_{record['Hole']}"
-                tied_teams_or_points = record.get('Tied_Teams', '')
-                
-                if record.get('Tied', False):
-                    # This was a tie
-                    tied_teams = tied_teams_or_points.split(',') if tied_teams_or_points else []
-                    points_value = 1  # Default, will be recalculated
-                else:
-                    # This was a win
-                    tied_teams = []
-                    try:
-                        points_value = int(tied_teams_or_points) if tied_teams_or_points else 1
-                    except (ValueError, TypeError):
-                        points_value = 1
+                points_value = record.get('Points_Value', 1)
                 
                 skin_result = {
                     'group': record['Group'],
                     'hole': record['Hole'],
-                    'winner': record.get('Winner') or None,
+                    'winner': record['Winner'],
                     'score': record.get('Winning_Score'),
-                    'tied': record.get('Tied', False),
-                    'tied_teams': tied_teams if tied_teams != [''] else [],
+                    'tied': False,
                     'points_value': points_value
                 }
                 st.session_state.day2_skins[key] = skin_result
                 
                 # Add points to winning team
-                if skin_result['winner'] and not skin_result['tied']:
-                    st.session_state.team_day2_points[skin_result['winner']] += points_value
+                st.session_state.team_day2_points[record['Winner']] += points_value
         
         # Recalculate any missing skins
         recalculate_missing_skins()
@@ -729,7 +718,6 @@ def day2_scoring_page():
             skin_info = st.session_state.day2_skins[skin_key]
             if skin_info['tied']:
                 st.warning(f"🤝 Hole {selected_hole}: TIE - Skin carries over to next hole!")
-                st.markdown(f"Tied teams: {', '.join(skin_info.get('tied_teams', []))}")
             else:
                 st.success(f"🏆 Hole {selected_hole}: **{skin_info['winner']}** wins {skin_info.get('points_value', 1)} point(s)!")
     
