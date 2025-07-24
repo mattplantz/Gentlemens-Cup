@@ -52,9 +52,17 @@ def init_google_sheets():
         client = gspread.authorize(credentials)
         
         # Open the spreadsheet (you'll need to create this and share it with your service account)
-        spreadsheet = client.open("Gentlemens Cup Tournament Data")
-        
-        return client, spreadsheet
+        try:
+            spreadsheet = client.open("Gentlemens Cup Tournament Data")
+            st.success(f"Successfully connected to spreadsheet: {spreadsheet.title}")
+            return client, spreadsheet
+        except Exception as sheet_error:
+            st.error(f"Could not open spreadsheet 'Gentlemens Cup Tournament Data': {sheet_error}")
+            st.error("Make sure:")
+            st.error("1. You created a Google Sheet with exactly this name: 'Gentlemens Cup Tournament Data'")
+            st.error(f"2. You shared it with: {credentials_dict.get('client_email', 'YOUR_SERVICE_ACCOUNT_EMAIL')}")
+            st.error("3. You gave the service account 'Editor' permissions")
+            return None, None
     
     except Exception as e:
         st.error(f"Error connecting to Google Sheets: {e}")
@@ -64,34 +72,47 @@ def init_google_sheets():
 def setup_sheets_structure(spreadsheet):
     """Setup the initial sheet structure"""
     try:
+        st.info("Setting up sheet structure...")
+        
         # Create Day 1 scores sheet
         try:
             day1_sheet = spreadsheet.worksheet("Day1_Scores")
+            st.success("Found existing Day1_Scores sheet")
         except:
+            st.info("Creating Day1_Scores sheet...")
             day1_sheet = spreadsheet.add_worksheet(title="Day1_Scores", rows="200", cols="10")
             # Add headers
             day1_sheet.update('A1:F1', [['Team', 'Hole', 'Scramble_Score', 'Alt_Shot_Score', 'Timestamp', 'ID']])
+            st.success("Created Day1_Scores sheet")
         
         # Create Day 2 scores sheet
         try:
             day2_sheet = spreadsheet.worksheet("Day2_Scores")
+            st.success("Found existing Day2_Scores sheet")
         except:
+            st.info("Creating Day2_Scores sheet...")
             day2_sheet = spreadsheet.add_worksheet(title="Day2_Scores", rows="500", cols="10")
             # Add headers
             day2_sheet.update('A1:F1', [['Group', 'Hole', 'Team', 'Score', 'Timestamp', 'ID']])
+            st.success("Created Day2_Scores sheet")
         
         # Create Day 2 skins sheet
         try:
             skins_sheet = spreadsheet.worksheet("Day2_Skins")
+            st.success("Found existing Day2_Skins sheet")
         except:
+            st.info("Creating Day2_Skins sheet...")
             skins_sheet = spreadsheet.add_worksheet(title="Day2_Skins", rows="200", cols="10")
             # Add headers
             skins_sheet.update('A1:G1', [['Group', 'Hole', 'Winner', 'Winning_Score', 'Tied', 'Tied_Teams', 'ID']])
+            st.success("Created Day2_Skins sheet")
         
+        st.success("✅ All sheets setup successfully!")
         return day1_sheet, day2_sheet, skins_sheet
     
     except Exception as e:
         st.error(f"Error setting up sheets structure: {e}")
+        st.error("This might be a permissions issue. Check that your service account has Editor access.")
         return None, None, None
 
 def get_sheets():
@@ -385,33 +406,92 @@ def get_day2_scores():
     
     return st.session_state.get('day2_scores', {})
 
+def calculate_day1_points():
+    """Calculate Day 1 points for scramble and alternating shot competitions"""
+    day1_scores = get_day1_scores()
+    
+    # Initialize team totals
+    team_totals = {team: {'scramble': 0, 'alt_shot': 0, 'holes_completed': 0} for team in TEAMS}
+    
+    # Sum up scores for each team
+    for score_data in day1_scores.values():
+        team = score_data['team']
+        if score_data['scramble'] and score_data['alt_shot']:
+            team_totals[team]['scramble'] += score_data['scramble']
+            team_totals[team]['alt_shot'] += score_data['alt_shot']
+            team_totals[team]['holes_completed'] += 1
+    
+    # Only rank teams that have completed all 18 holes
+    complete_teams = [team for team in TEAMS if team_totals[team]['holes_completed'] == 18]
+    
+    def award_points_with_ties(scores_dict, point_values=[11, 7.5, 4]):
+        """Award points handling ties by splitting combined position points"""
+        if not scores_dict:
+            return {}
+        
+        # Sort teams by score (lowest first)
+        sorted_teams = sorted(scores_dict.items(), key=lambda x: x[1])
+        
+        points_awarded = {}
+        i = 0
+        
+        while i < len(sorted_teams):
+            current_score = sorted_teams[i][1]
+            tied_teams = [team for team, score in sorted_teams[i:] if score == current_score]
+            
+            # Calculate points to split
+            if i == 0:  # First place (or tied for first)
+                if len(tied_teams) == 1:
+                    points_to_split = point_values[0]  # 11
+                elif len(tied_teams) == 2:
+                    points_to_split = point_values[0] + point_values[1]  # 11 + 7.5 = 18.5
+                else:  # All three tied for first
+                    points_to_split = sum(point_values)  # 11 + 7.5 + 4 = 22.5
+            elif i == 1:  # Second place (or tied for second)
+                if len(tied_teams) == 1:
+                    points_to_split = point_values[1]  # 7.5
+                else:  # Tied for second and third
+                    points_to_split = point_values[1] + point_values[2]  # 7.5 + 4 = 11.5
+            else:  # Third place
+                points_to_split = point_values[2]  # 4
+            
+            # Award split points to each tied team
+            points_per_team = points_to_split / len(tied_teams)
+            for team in tied_teams:
+                points_awarded[team] = points_per_team
+            
+            i += len(tied_teams)
+        
+        return points_awarded
+    
+    # Calculate points for scramble competition
+    scramble_scores = {team: data['scramble'] for team, data in team_totals.items() if team in complete_teams}
+    scramble_points = award_points_with_ties(scramble_scores)
+    
+    # Calculate points for alternating shot competition
+    alt_shot_scores = {team: data['alt_shot'] for team, data in team_totals.items() if team in complete_teams}
+    alt_shot_points = award_points_with_ties(alt_shot_scores)
+    
+    return {
+        'scramble_points': scramble_points,
+        'alt_shot_points': alt_shot_points,
+        'team_totals': team_totals,
+        'complete_teams': complete_teams
+    }
+
 def calculate_leaderboard():
     """Calculate current team standings"""
     team_points = {team: 0 for team in TEAMS}
     
-    # Day 1 points (will be scaled to 45 total points)
-    day1_scores = get_day1_scores()
-    day1_team_totals = {team: {'scramble': 0, 'alt_shot': 0, 'holes_played': 0} for team in TEAMS}
+    # Day 1 points
+    day1_results = calculate_day1_points()
+    scramble_points = day1_results['scramble_points']
+    alt_shot_points = day1_results['alt_shot_points']
     
-    for score_data in day1_scores.values():
-        team = score_data['team']
-        if score_data['scramble'] and score_data['alt_shot']:
-            day1_team_totals[team]['scramble'] += score_data['scramble']
-            day1_team_totals[team]['alt_shot'] += score_data['alt_shot']
-            day1_team_totals[team]['holes_played'] += 1
-    
-    # Calculate Day 1 rankings (placeholder logic - you can adjust this)
-    day1_combined_scores = {}
+    # Add Day 1 points
     for team in TEAMS:
-        if day1_team_totals[team]['holes_played'] > 0:
-            combined = day1_team_totals[team]['scramble'] + day1_team_totals[team]['alt_shot']
-            day1_combined_scores[team] = combined
-    
-    if day1_combined_scores:
-        sorted_teams = sorted(day1_combined_scores.items(), key=lambda x: x[1])
-        for i, (team, score) in enumerate(sorted_teams):
-            # Award points: 1st place gets more points
-            team_points[team] += (15 - i * 5)  # Placeholder point distribution
+        team_points[team] += scramble_points.get(team, 0)
+        team_points[team] += alt_shot_points.get(team, 0)
     
     # Day 2 points (skins)
     if 'day2_skins' not in st.session_state:
@@ -421,7 +501,7 @@ def calculate_leaderboard():
         if skin_data['winner'] and not skin_data['tied']:
             team_points[skin_data['winner']] += 1
     
-    return team_points, day1_team_totals
+    return team_points, day1_results
 
 def login_page():
     """Display login page"""
@@ -571,40 +651,114 @@ def leaderboard_page():
     """Display live leaderboard"""
     st.title("🏆 Live Leaderboard")
     
-    team_points, day1_totals = calculate_leaderboard()
+    team_points, day1_results = calculate_leaderboard()
     
     # Overall standings
     st.markdown("### Overall Team Standings")
     leaderboard_data = []
     for team in TEAMS:
+        day1_scramble = day1_results['scramble_points'].get(team, 0)
+        day1_alt_shot = day1_results['alt_shot_points'].get(team, 0)
+        day1_total = day1_scramble + day1_alt_shot
+        
+        day2_skins = sum(1 for skin in st.session_state.day2_skins.values() 
+                        if skin.get('winner') == team and not skin.get('tied'))
+        
         leaderboard_data.append({
             'Team': team,
-            'Total Points': team_points[team],
-            'Day 1 Holes Played': day1_totals[team]['holes_played'],
-            'Day 2 Skins': sum(1 for skin in st.session_state.day2_skins.values() 
-                              if skin.get('winner') == team and not skin.get('tied'))
+            'Day 1 Points': f"{day1_total:.1f}",
+            'Day 2 Skins': day2_skins,
+            'Total Points': f"{team_points[team]:.1f}"
         })
     
     # Sort by total points
-    leaderboard_data.sort(key=lambda x: x['Total Points'], reverse=True)
+    leaderboard_data.sort(key=lambda x: float(x['Total Points']), reverse=True)
     df_leaderboard = pd.DataFrame(leaderboard_data)
     st.dataframe(df_leaderboard, use_container_width=True)
     
-    # Day 1 Summary
+    # Day 1 Detailed Results
     col1, col2 = st.columns(2)
     
     with col1:
-        st.markdown("### Day 1 Progress")
-        for team in TEAMS:
-            holes_played = day1_totals[team]['holes_played']
-            st.metric(f"{team}", f"{holes_played}/18 holes")
+        st.markdown("### Day 1 - Scramble Competition")
+        if day1_results['complete_teams']:
+            scramble_data = []
+            for team in TEAMS:
+                if team in day1_results['complete_teams']:
+                    total_score = day1_results['team_totals'][team]['scramble']
+                    points = day1_results['scramble_points'].get(team, 0)
+                    scramble_data.append({
+                        'Team': team,
+                        'Total Score': total_score,
+                        'Points': f"{points:.1f}"
+                    })
+            
+            # Sort by score (lowest first)
+            scramble_data.sort(key=lambda x: x['Total Score'])
+            df_scramble = pd.DataFrame(scramble_data)
+            st.dataframe(df_scramble, use_container_width=True)
+        else:
+            st.info("No completed rounds yet")
     
     with col2:
-        st.markdown("### Day 2 Skins Summary")
-        for group in GROUPS:
-            skins_played = sum(1 for key in st.session_state.day2_skins.keys() 
-                             if key.startswith(f"{group}_"))
-            st.metric(f"Group {group}", f"{skins_played}/18 holes")
+        st.markdown("### Day 1 - Alternating Shot Competition")
+        if day1_results['complete_teams']:
+            alt_shot_data = []
+            for team in TEAMS:
+                if team in day1_results['complete_teams']:
+                    total_score = day1_results['team_totals'][team]['alt_shot']
+                    points = day1_results['alt_shot_points'].get(team, 0)
+                    alt_shot_data.append({
+                        'Team': team,
+                        'Total Score': total_score,
+                        'Points': f"{points:.1f}"
+                    })
+            
+            # Sort by score (lowest first)
+            alt_shot_data.sort(key=lambda x: x['Total Score'])
+            df_alt_shot = pd.DataFrame(alt_shot_data)
+            st.dataframe(df_alt_shot, use_container_width=True)
+        else:
+            st.info("No completed rounds yet")
+    
+    # Day 1 Progress
+    st.markdown("### Day 1 Progress")
+    progress_data = []
+    for team in TEAMS:
+        holes_played = day1_results['team_totals'][team]['holes_completed']
+        progress_data.append({
+            'Team': team,
+            'Holes Completed': f"{holes_played}/18",
+            'Status': "✅ Complete" if holes_played == 18 else f"🏌️ In Progress ({holes_played}/18)"
+        })
+    
+    df_progress = pd.DataFrame(progress_data)
+    st.dataframe(df_progress, use_container_width=True)
+    
+    # Day 2 Summary
+    st.markdown("### Day 2 Skins Summary")
+    skins_summary = []
+    for group in GROUPS:
+        skins_played = sum(1 for key in st.session_state.day2_skins.keys() 
+                          if key.startswith(f"{group}_"))
+        group_skins = {team: 0 for team in TEAMS}
+        
+        for skin_data in st.session_state.day2_skins.values():
+            if (skin_data['group'] == group and 
+                skin_data['winner'] and 
+                not skin_data['tied']):
+                group_skins[skin_data['winner']] += 1
+        
+        skins_summary.append({
+            'Group': f"Group {group}",
+            'Holes Played': f"{skins_played}/18",
+            'Young Guns': group_skins['Young Guns'],
+            'OGs': group_skins['OGs'],
+            'Mids': group_skins['Mids']
+        })
+    
+    df_skins = pd.DataFrame(skins_summary)
+    st.dataframe(df_skins, use_container_width=True)
     
     # Auto-refresh every 30 seconds
     if st.button("🔄 Refresh Leaderboard"):
