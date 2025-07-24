@@ -5,13 +5,6 @@ Created on Thu Jul 24 13:32:12 2025
 @author: MPlantz
 """
 
-# -*- coding: utf-8 -*-
-"""
-Created on Thu Jul 24 13:32:12 2025
-
-@author: MPlantz
-"""
-
 import streamlit as st
 import pandas as pd
 import gspread
