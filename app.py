@@ -388,8 +388,29 @@ def load_data_from_sheets():
                     'tied_teams': tied_teams if tied_teams != [''] else []
                 }
         
+        # CRITICAL: Recalculate any missing skins after loading data
+        recalculate_missing_skins()
+        
     except Exception as e:
         st.error(f"Error loading data from Google Sheets: {e}")
+
+def recalculate_missing_skins():
+    """Recalculate skins for any holes that have scores but no skin result"""
+    if 'day2_scores' not in st.session_state:
+        return
+    
+    # Get all unique group-hole combinations from scores
+    scored_holes = set()
+    for key, score_data in st.session_state.day2_scores.items():
+        if score_data['score'] and score_data['score'] > 0:
+            scored_holes.add((score_data['group'], score_data['hole']))
+    
+    # Check which holes need skins calculated
+    for group, hole in scored_holes:
+        skin_key = f"{group}_{hole}"
+        if skin_key not in st.session_state.day2_skins:
+            # This hole has scores but no skin result - calculate it
+            calculate_skins(group, hole)
 
 def get_day1_scores():
     """Get all Day 1 scores"""
@@ -494,9 +515,12 @@ def calculate_leaderboard():
         team_points[team] += scramble_points.get(team, 0)
         team_points[team] += alt_shot_points.get(team, 0)
     
-    # Day 2 points (skins) - ensure we have fresh data
+    # Day 2 points (skins) - ensure we have fresh data and calculations
     if st.session_state.get('using_sheets', False):
-        load_data_from_sheets()
+        load_data_from_sheets()  # This now includes recalculate_missing_skins()
+    else:
+        # For local storage, ensure skins are calculated
+        recalculate_missing_skins()
     
     if 'day2_skins' not in st.session_state:
         st.session_state.day2_skins = {}
