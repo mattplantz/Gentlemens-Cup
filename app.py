@@ -5,6 +5,13 @@ Created on Thu Jul 24 13:32:12 2025
 @author: MPlantz
 """
 
+# -*- coding: utf-8 -*-
+"""
+Created on Thu Jul 24 13:32:12 2025
+
+@author: MPlantz
+"""
+
 import streamlit as st
 import pandas as pd
 import gspread
@@ -23,7 +30,8 @@ st.set_page_config(
 # Constants
 TEAMS = ["Young Guns", "OGs", "Mids"]
 ACCESS_CODE = "gentlemen2025"  # Change this to your preferred code
-HOLES = list(range(1, 19))  # 18 holes
+HOLES = list(range(1, 19))  # 18 holes for Day 1
+DAY2_HOLES = list(range(1, 10))  # 9 holes for Day 2
 GROUPS = list(range(1, 6))  # 5 groups for Day 2
 
 # Google Sheets setup with full integration
@@ -493,7 +501,10 @@ def calculate_leaderboard():
         team_points[team] += scramble_points.get(team, 0)
         team_points[team] += alt_shot_points.get(team, 0)
     
-    # Day 2 points (skins)
+    # Day 2 points (skins) - ensure we have fresh data
+    if st.session_state.get('using_sheets', False):
+        load_data_from_sheets()
+    
     if 'day2_skins' not in st.session_state:
         st.session_state.day2_skins = {}
     
@@ -574,13 +585,13 @@ def day1_scoring_page():
 def day2_scoring_page():
     """Day 2 scoring interface"""
     st.title("🎯 Day 2 Scoring - Skins Game")
-    st.markdown("**Format**: Individual play, lowest score wins the skin")
+    st.markdown("**Format**: Individual play, lowest score wins the skin (9 holes)")
     
     col1, col2 = st.columns([1, 2])
     
     with col1:
         selected_group = st.selectbox("Select Group:", GROUPS)
-        selected_hole = st.selectbox("Select Hole:", HOLES, key="day2_hole")
+        selected_hole = st.selectbox("Select Hole:", DAY2_HOLES, key="day2_hole")
     
     with col2:
         st.markdown(f"### Group {selected_group} - Hole {selected_hole}")
@@ -623,7 +634,7 @@ def display_group_scorecard(group):
     """Display scorecard for a specific group"""
     scorecard_data = []
     
-    for hole in HOLES:
+    for hole in DAY2_HOLES:  # Use DAY2_HOLES instead of HOLES
         hole_data = {'Hole': hole}
         for team in TEAMS:
             key = f"{group}_{hole}_{team}"
@@ -651,117 +662,148 @@ def leaderboard_page():
     """Display live leaderboard"""
     st.title("🏆 Live Leaderboard")
     
-    team_points, day1_results = calculate_leaderboard()
+    # Auto-refresh container
+    placeholder = st.empty()
     
-    # Overall standings
-    st.markdown("### Overall Team Standings")
-    leaderboard_data = []
-    for team in TEAMS:
-        day1_scramble = day1_results['scramble_points'].get(team, 0)
-        day1_alt_shot = day1_results['alt_shot_points'].get(team, 0)
-        day1_total = day1_scramble + day1_alt_shot
+    with placeholder.container():
+        team_points, day1_results = calculate_leaderboard()
         
-        day2_skins = sum(1 for skin in st.session_state.day2_skins.values() 
-                        if skin.get('winner') == team and not skin.get('tied'))
+        # Overall standings
+        st.markdown("### Overall Team Standings")
+        leaderboard_data = []
+        for team in TEAMS:
+            day1_scramble = day1_results['scramble_points'].get(team, 0)
+            day1_alt_shot = day1_results['alt_shot_points'].get(team, 0)
+            day1_total = day1_scramble + day1_alt_shot
+            
+            day2_skins = sum(1 for skin in st.session_state.day2_skins.values() 
+                            if skin.get('winner') == team and not skin.get('tied'))
+            
+            leaderboard_data.append({
+                'Team': team,
+                'Day 1 Points': f"{day1_total:.1f}",
+                'Day 2 Skins': day2_skins,
+                'Total Points': f"{team_points[team]:.1f}"
+            })
         
-        leaderboard_data.append({
-            'Team': team,
-            'Day 1 Points': f"{day1_total:.1f}",
-            'Day 2 Skins': day2_skins,
-            'Total Points': f"{team_points[team]:.1f}"
-        })
+        # Sort by total points
+        leaderboard_data.sort(key=lambda x: float(x['Total Points']), reverse=True)
+        df_leaderboard = pd.DataFrame(leaderboard_data)
+        st.dataframe(df_leaderboard, use_container_width=True)
+        
+        # Day 1 Detailed Results
+        col1, col2 = st.columns(2)
+        
+        with col1:
+            st.markdown("### Day 1 - Scramble Competition")
+            if day1_results['complete_teams']:
+                scramble_data = []
+                for team in TEAMS:
+                    if team in day1_results['complete_teams']:
+                        total_score = day1_results['team_totals'][team]['scramble']
+                        points = day1_results['scramble_points'].get(team, 0)
+                        scramble_data.append({
+                            'Team': team,
+                            'Total Score': total_score,
+                            'Points': f"{points:.1f}"
+                        })
+                
+                # Sort by score (lowest first)
+                scramble_data.sort(key=lambda x: x['Total Score'])
+                df_scramble = pd.DataFrame(scramble_data)
+                st.dataframe(df_scramble, use_container_width=True)
+            else:
+                st.info("No completed rounds yet")
+        
+        with col2:
+            st.markdown("### Day 1 - Alternating Shot Competition")
+            if day1_results['complete_teams']:
+                alt_shot_data = []
+                for team in TEAMS:
+                    if team in day1_results['complete_teams']:
+                        total_score = day1_results['team_totals'][team]['alt_shot']
+                        points = day1_results['alt_shot_points'].get(team, 0)
+                        alt_shot_data.append({
+                            'Team': team,
+                            'Total Score': total_score,
+                            'Points': f"{points:.1f}"
+                        })
+                
+                # Sort by score (lowest first)
+                alt_shot_data.sort(key=lambda x: x['Total Score'])
+                df_alt_shot = pd.DataFrame(alt_shot_data)
+                st.dataframe(df_alt_shot, use_container_width=True)
+            else:
+                st.info("No completed rounds yet")
+        
+        # Day 1 Progress with Running Scores
+        st.markdown("### Day 1 Progress & Running Scores")
+        progress_data = []
+        for team in TEAMS:
+            holes_played = day1_results['team_totals'][team]['holes_completed']
+            scramble_total = day1_results['team_totals'][team]['scramble']
+            alt_shot_total = day1_results['team_totals'][team]['alt_shot']
+            
+            # Format running scores
+            if holes_played > 0:
+                scramble_display = f"{scramble_total} ({holes_played} holes)"
+                alt_shot_display = f"{alt_shot_total} ({holes_played} holes)"
+            else:
+                scramble_display = "No scores"
+                alt_shot_display = "No scores"
+            
+            progress_data.append({
+                'Team': team,
+                'Holes Completed': f"{holes_played}/18",
+                'Scramble Running Total': scramble_display,
+                'Alt Shot Running Total': alt_shot_display,
+                'Status': "✅ Complete" if holes_played == 18 else f"🏌️ In Progress ({holes_played}/18)"
+            })
+        
+        df_progress = pd.DataFrame(progress_data)
+        st.dataframe(df_progress, use_container_width=True)
+        
+        # Day 2 Summary
+        st.markdown("### Day 2 Skins Summary")
+        skins_summary = []
+        for group in GROUPS:
+            skins_played = sum(1 for key in st.session_state.day2_skins.keys() 
+                              if key.startswith(f"{group}_"))
+            group_skins = {team: 0 for team in TEAMS}
+            
+            for skin_data in st.session_state.day2_skins.values():
+                if (skin_data['group'] == group and 
+                    skin_data['winner'] and 
+                    not skin_data['tied']):
+                    group_skins[skin_data['winner']] += 1
+            
+            skins_summary.append({
+                'Group': f"Group {group}",
+                'Holes Played': f"{skins_played}/9",  # Changed from 18 to 9
+                'Young Guns': group_skins['Young Guns'],
+                'OGs': group_skins['OGs'],
+                'Mids': group_skins['Mids']
+            })
+        
+        df_skins = pd.DataFrame(skins_summary)
+        st.dataframe(df_skins, use_container_width=True)
     
-    # Sort by total points
-    leaderboard_data.sort(key=lambda x: float(x['Total Points']), reverse=True)
-    df_leaderboard = pd.DataFrame(leaderboard_data)
-    st.dataframe(df_leaderboard, use_container_width=True)
-    
-    # Day 1 Detailed Results
-    col1, col2 = st.columns(2)
+    # Auto-refresh controls
+    col1, col2, col3 = st.columns([1, 1, 2])
     
     with col1:
-        st.markdown("### Day 1 - Scramble Competition")
-        if day1_results['complete_teams']:
-            scramble_data = []
-            for team in TEAMS:
-                if team in day1_results['complete_teams']:
-                    total_score = day1_results['team_totals'][team]['scramble']
-                    points = day1_results['scramble_points'].get(team, 0)
-                    scramble_data.append({
-                        'Team': team,
-                        'Total Score': total_score,
-                        'Points': f"{points:.1f}"
-                    })
-            
-            # Sort by score (lowest first)
-            scramble_data.sort(key=lambda x: x['Total Score'])
-            df_scramble = pd.DataFrame(scramble_data)
-            st.dataframe(df_scramble, use_container_width=True)
-        else:
-            st.info("No completed rounds yet")
+        if st.button("🔄 Refresh Now"):
+            st.rerun()
     
     with col2:
-        st.markdown("### Day 1 - Alternating Shot Competition")
-        if day1_results['complete_teams']:
-            alt_shot_data = []
-            for team in TEAMS:
-                if team in day1_results['complete_teams']:
-                    total_score = day1_results['team_totals'][team]['alt_shot']
-                    points = day1_results['alt_shot_points'].get(team, 0)
-                    alt_shot_data.append({
-                        'Team': team,
-                        'Total Score': total_score,
-                        'Points': f"{points:.1f}"
-                    })
-            
-            # Sort by score (lowest first)
-            alt_shot_data.sort(key=lambda x: x['Total Score'])
-            df_alt_shot = pd.DataFrame(alt_shot_data)
-            st.dataframe(df_alt_shot, use_container_width=True)
-        else:
-            st.info("No completed rounds yet")
+        auto_refresh = st.checkbox("Auto-refresh (30s)", value=False)
     
-    # Day 1 Progress
-    st.markdown("### Day 1 Progress")
-    progress_data = []
-    for team in TEAMS:
-        holes_played = day1_results['team_totals'][team]['holes_completed']
-        progress_data.append({
-            'Team': team,
-            'Holes Completed': f"{holes_played}/18",
-            'Status': "✅ Complete" if holes_played == 18 else f"🏌️ In Progress ({holes_played}/18)"
-        })
+    with col3:
+        st.markdown("*Leaderboard updates automatically when scores are saved*")
     
-    df_progress = pd.DataFrame(progress_data)
-    st.dataframe(df_progress, use_container_width=True)
-    
-    # Day 2 Summary
-    st.markdown("### Day 2 Skins Summary")
-    skins_summary = []
-    for group in GROUPS:
-        skins_played = sum(1 for key in st.session_state.day2_skins.keys() 
-                          if key.startswith(f"{group}_"))
-        group_skins = {team: 0 for team in TEAMS}
-        
-        for skin_data in st.session_state.day2_skins.values():
-            if (skin_data['group'] == group and 
-                skin_data['winner'] and 
-                not skin_data['tied']):
-                group_skins[skin_data['winner']] += 1
-        
-        skins_summary.append({
-            'Group': f"Group {group}",
-            'Holes Played': f"{skins_played}/18",
-            'Young Guns': group_skins['Young Guns'],
-            'OGs': group_skins['OGs'],
-            'Mids': group_skins['Mids']
-        })
-    
-    df_skins = pd.DataFrame(skins_summary)
-    st.dataframe(df_skins, use_container_width=True)
-    
-    # Auto-refresh every 30 seconds
-    if st.button("🔄 Refresh Leaderboard"):
+    # Auto-refresh functionality
+    if auto_refresh:
+        time.sleep(30)
         st.rerun()
 
 def main():
