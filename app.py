@@ -1,4 +1,12 @@
-# -*- coding: utf-8 -*-
+# Auto-refresh controls
+    col1, col2 = st.columns([1, 1])
+    
+    with col1:
+        if st.button("🔄 Refresh Now"):
+            st.rerun()
+    
+    with col2:
+        st.markdown("*Leaderboard updates automatically when scores are saved*")# -*- coding: utf-8 -*-
 """
 Created on Thu Jul 24 13:32:12 2025
 
@@ -227,8 +235,8 @@ def save_day2_score(group, hole, team, score):
     except Exception as e:
         st.error(f"Error saving to Google Sheets: {e}")
     
-    # Calculate skins for this hole with carryover logic
-    calculate_skins_with_carryover(group, hole)
+    # Calculate skins for this hole and recalculate subsequent holes if needed
+    recalculate_group_skins_from_hole(group, hole)
 
 def save_skin_result(group, hole, winner, winning_score, points_value):
     """Save skin calculation results to Google Sheets"""
@@ -261,76 +269,114 @@ def save_skin_result(group, hole, winner, winning_score, points_value):
     except Exception as e:
         st.error(f"Error saving skin result to Google Sheets: {e}")
 
-def calculate_skins_with_carryover(group, hole):
-    """Calculate skins with carryover logic for consecutive ties"""
+def recalculate_group_skins_from_hole(group, start_hole):
+    """Recalculate all skins for a group starting from a specific hole"""
+    # Clear existing team points for this group to recalculate
+    if 'team_day2_points' not in st.session_state:
+        st.session_state.team_day2_points = {team: 0 for team in TEAMS}
+    
+    # Remove points from this group and recalculate from scratch
+    for hole in DAY2_HOLES:
+        skin_key = f"{group}_{hole}"
+        if skin_key in st.session_state.get('day2_skins', {}):
+            old_skin = st.session_state.day2_skins[skin_key]
+            if old_skin.get('winner') and not old_skin.get('tied'):
+                # Remove old points
+                old_points = old_skin.get('points_value', 1)
+                st.session_state.team_day2_points[old_skin['winner']] -= old_points
+    
+    # Clear existing skins for this group
+    for hole in DAY2_HOLES:
+        skin_key = f"{group}_{hole}"
+        if skin_key in st.session_state.get('day2_skins', {}):
+            del st.session_state.day2_skins[skin_key]
+    
+    # Now recalculate all skins for this group in hole order
     if 'day2_skins' not in st.session_state:
         st.session_state.day2_skins = {}
     
-    # Get all scores for this hole in this group
-    hole_scores = {}
-    for team in TEAMS:
-        key = f"{group}_{hole}_{team}"
-        if key in st.session_state.day2_scores:
-            score = st.session_state.day2_scores[key]['score']
-            if score and score > 0:  # Valid score
-                hole_scores[team] = score
-    
-    # Need at least 2 scores to determine winner
-    if len(hole_scores) < 2:
-        return
-    
-    # Determine winner (lowest score wins)
-    min_score = min(hole_scores.values())
-    winners = [team for team, score in hole_scores.items() if score == min_score]
-    
-    # Calculate points value based on carryover
-    points_value = calculate_hole_points_value(group, hole)
-    
-    skin_key = f"{group}_{hole}"
-    
-    if len(winners) == 1:  # Clear winner
-        winner = winners[0]
-        skin_result = {
-            'group': group,
-            'hole': hole,
-            'winner': winner,
-            'score': min_score,
-            'tied': False,
-            'points_value': points_value
-        }
-        st.session_state.day2_skins[skin_key] = skin_result
-        save_skin_result(group, hole, winner, min_score, points_value)
+    for hole in DAY2_HOLES:
+        # Get all scores for this hole in this group
+        hole_scores = {}
+        for team in TEAMS:
+            key = f"{group}_{hole}_{team}"
+            if key in st.session_state.get('day2_scores', {}):
+                score = st.session_state.day2_scores[key]['score']
+                if score and score > 0:  # Valid score
+                    hole_scores[team] = score
         
-        # Award points to the winning team immediately
-        update_team_points(winner, points_value)
+        # Need at least 2 scores to determine winner
+        if len(hole_scores) < 2:
+            continue
         
-    else:  # Tie - skin carries over
-        skin_result = {
-            'group': group,
-            'hole': hole,
-            'winner': None,
-            'score': min_score,
-            'tied': True,
-            'points_value': points_value
-        }
-        st.session_state.day2_skins[skin_key] = skin_result
-        # Don't save ties to Google Sheets - we only care about wins
+        # Determine winner (lowest score wins)
+        min_score = min(hole_scores.values())
+        winners = [team for team, score in hole_scores.items() if score == min_score]
+        
+        # Calculate points value based on carryover from previous holes in this group
+        points_value = calculate_hole_points_value(group, hole)
+        
+        skin_key = f"{group}_{hole}"
+        
+        if len(winners) == 1:  # Clear winner
+            winner = winners[0]
+            skin_result = {
+                'group': group,
+                'hole': hole,
+                'winner': winner,
+                'score': min_score,
+                'tied': False,
+                'points_value': points_value
+            }
+            st.session_state.day2_skins[skin_key] = skin_result
+            save_skin_result(group, hole, winner, min_score, points_value)
+            
+            # Award points to the winning team
+            st.session_state.team_day2_points[winner] += points_value
+            
+        else:  # Tie - skin carries over
+            skin_result = {
+                'group': group,
+                'hole': hole,
+                'winner': None,
+                'score': min_score,
+                'tied': True,
+                'points_value': points_value
+            }
+            st.session_state.day2_skins[skin_key] = skin_result
+            # Don't save ties to Google Sheets - we only care about wins
 
 def calculate_hole_points_value(group, hole):
     """Calculate points value for a hole based on carryover from previous ties"""
-    points_value = 1  # Base value
+    points_value = 1  # Base value for current hole
     
     # Look backwards from current hole to count consecutive ties
     for prev_hole in range(hole - 1, 0, -1):  # Go backwards from hole-1 to 1
         prev_skin_key = f"{group}_{prev_hole}"
-        if prev_skin_key in st.session_state.day2_skins:
+        if prev_skin_key in st.session_state.get('day2_skins', {}):
             prev_skin = st.session_state.day2_skins[prev_skin_key]
-            if prev_skin['tied']:
+            if prev_skin.get('tied', False):
                 points_value += 1  # Add 1 for each consecutive tie
             else:
-                break  # Stop at first non-tie
+                break  # Stop at first non-tie (someone won, so carryover stops)
         else:
-            break  # Stop if no data for previous hole
+            # If there's no skin data for previous hole, check if there are scores
+            # If there are scores but no skin data, we need to calculate it first
+            has_scores = False
+            for team in TEAMS:
+                score_key = f"{group}_{prev_hole}_{team}"
+                if score_key in st.session_state.get('day2_scores', {}):
+                    score = st.session_state.day2_scores[score_key].get('score')
+                    if score and score > 0:
+                        has_scores = True
+                        break
+            
+            if not has_scores:
+                break  # No scores for this hole, stop looking back
+            else:
+                # We have scores but no skin result - this shouldn't happen in our new logic
+                # but if it does, assume it needs to be calculated
+                break
     
     return points_value
 
@@ -407,18 +453,15 @@ def recalculate_missing_skins():
     if 'day2_scores' not in st.session_state:
         return
     
-    # Get all unique group-hole combinations from scores
-    scored_holes = set()
+    # Get all unique groups that have scores
+    groups_with_scores = set()
     for key, score_data in st.session_state.day2_scores.items():
         if score_data['score'] and score_data['score'] > 0:
-            scored_holes.add((score_data['group'], score_data['hole']))
+            groups_with_scores.add(score_data['group'])
     
-    # Check which holes need skins calculated
-    for group, hole in scored_holes:
-        skin_key = f"{group}_{hole}"
-        if skin_key not in st.session_state.day2_skins:
-            # This hole has scores but no skin result - calculate it
-            calculate_skins_with_carryover(group, hole)
+    # Recalculate skins for each group
+    for group in groups_with_scores:
+        recalculate_group_skins_from_hole(group, 1)
 
 def get_day1_scores():
     """Get all Day 1 scores"""
