@@ -1,12 +1,4 @@
-# Auto-refresh controls
-    col1, col2 = st.columns([1, 1])
-    
-    with col1:
-        if st.button("🔄 Refresh Now"):
-            st.rerun()
-    
-    with col2:
-        st.markdown("*Leaderboard updates automatically when scores are saved*")# -*- coding: utf-8 -*-
+# -*- coding: utf-8 -*-
 """
 Created on Thu Jul 24 13:32:12 2025
 
