@@ -31,10 +31,10 @@ GROUPS = list(range(1, 6))  # 5 groups for Day 2
 DAY1_COURSE = {
     1: {'par': 4, 'yardage': 322}, 2: {'par': 4, 'yardage': 359}, 3: {'par': 3, 'yardage': 119},
     4: {'par': 4, 'yardage': 361}, 5: {'par': 5, 'yardage': 486}, 6: {'par': 3, 'yardage': 197},
-    7: {'par': 5, 'yardage': 517}, 8: {'par': 4, 'yardage': 167}, 9: {'par': 4, 'yardage': 353},
+    7: {'par': 5, 'yardage': 517}, 8: {'par': 3, 'yardage': 167}, 9: {'par': 4, 'yardage': 353},
     10: {'par': 4, 'yardage': 284}, 11: {'par': 3, 'yardage': 192}, 12: {'par': 4, 'yardage': 326},
     13: {'par': 5, 'yardage': 497}, 14: {'par': 4, 'yardage': 314}, 15: {'par': 3, 'yardage': 135},
-    16: {'par': 4, 'yardage': 322}, 17: {'par': 3, 'yardage': 308}, 18: {'par': 5, 'yardage': 424}
+    16: {'par': 4, 'yardage': 322}, 17: {'par': 4, 'yardage': 308}, 18: {'par': 4, 'yardage': 424}
 }
 
 DAY2_COURSE = {
