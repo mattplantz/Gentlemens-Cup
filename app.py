@@ -22,7 +22,7 @@ st.set_page_config(
 
 # Constants
 TEAMS = ["Young Guns", "OGs", "Mids"]
-ACCESS_CODE = "gentlemen2025"  # Change this to your preferred code
+ACCESS_CODE = "1"  # Change this to your preferred code
 HOLES = list(range(1, 19))  # 18 holes for Day 1
 DAY2_HOLES = list(range(1, 10))  # 9 holes for Day 2
 GROUPS = list(range(1, 6))  # 5 groups for Day 2
