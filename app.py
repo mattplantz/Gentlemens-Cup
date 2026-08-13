@@ -1118,6 +1118,49 @@ def _format_supreme_leader(leader):
     return " & ".join(f"Supreme Leader {n}" for n in names)
 
 
+# American-flag "Old Glory" colors for the history tables.
+FLAG_BLUE = "#0A3161"
+FLAG_RED = "#B31942"
+
+
+def _html_table(headers, rows, highlight_first_col=True):
+    """Render a styled HTML table with an Old-Glory-blue header row.
+
+    `rows` is a list of lists (already stringified). When highlight_first_col
+    is set, the leftmost column of each body row also gets the blue treatment,
+    which reads as a header column down the side."""
+    thead = "".join(
+        f'<th style="padding:10px 14px;text-align:left;font-weight:700;'
+        f'color:#fff;background:{FLAG_BLUE};border:none;white-space:nowrap;">{h}</th>'
+        for h in headers
+    )
+    body = ""
+    for i, row in enumerate(rows):
+        zebra = "#ffffff" if i % 2 == 0 else "#f4f6fb"
+        cells = ""
+        for j, cell in enumerate(row):
+            # Use an en-dash HTML entity for empty cells so encoding can't garble it
+            display = "&ndash;" if cell in ("—", "-", "", None) else cell
+            if highlight_first_col and j == 0:
+                cells += (
+                    f'<td style="padding:10px 14px;font-weight:700;color:#fff;'
+                    f'background:{FLAG_BLUE};border:none;white-space:nowrap;">{display}</td>'
+                )
+            else:
+                cells += (
+                    f'<td style="padding:10px 14px;color:#1a1a1a;background:{zebra};'
+                    f'border:none;">{display}</td>'
+                )
+        body += f"<tr>{cells}</tr>"
+
+    return (
+        '<table style="border-collapse:separate;border-spacing:0;width:100%;'
+        'border-radius:10px;overflow:hidden;font-family:inherit;font-size:0.95rem;'
+        'box-shadow:0 1px 4px rgba(10,49,97,0.15);margin-bottom:0.5rem;">'
+        f"<thead><tr>{thead}</tr></thead><tbody>{body}</tbody></table>"
+    )
+
+
 def load_supreme_leaders():
     """Load the Supreme Leaders head-to-head totals, if present."""
     path = os.path.join(HISTORY_DIR, "supreme_leaders.json")
@@ -1146,26 +1189,25 @@ def history_page():
     sorted_years = sorted(years_data.keys(), reverse=True)
 
     # Champions at a glance
-    st.markdown("### Champions")
+    st.markdown("### 🏆 Champions")
+    champ_headers = ["Year", "Champion", "Supreme Leader"]
     champ_rows = []
     for year in sorted_years:
         results = years_data[year].get('results', {})
-        champ_rows.append({
-            'Year': year,
-            'Champion': results.get('champion', '—'),
-            'Supreme Leader': _format_supreme_leader(results.get('supreme_leader')),
-        })
-    st.dataframe(pd.DataFrame(champ_rows), use_container_width=True, hide_index=True)
+        champ_rows.append([
+            str(year),
+            results.get('champion', '—'),
+            _format_supreme_leader(results.get('supreme_leader')),
+        ])
+    st.markdown(_html_table(champ_headers, champ_rows), unsafe_allow_html=True)
 
     # Supreme Leaders head-to-head
     sl = load_supreme_leaders()
     if sl and sl.get('head_to_head'):
         st.markdown("### 👑 Supreme Leaders Head to Head")
         h2h = sorted(sl['head_to_head'], key=lambda x: x.get('wins', 0), reverse=True)
-        df_h2h = pd.DataFrame(
-            [{'Name': entry.get('name', '—'), 'Total Wins': entry.get('wins', 0)} for entry in h2h]
-        )
-        st.dataframe(df_h2h, use_container_width=True, hide_index=True)
+        h2h_rows = [[entry.get('name', '—'), str(entry.get('wins', 0))] for entry in h2h]
+        st.markdown(_html_table(["Name", "Total Wins"], h2h_rows), unsafe_allow_html=True)
 
     st.divider()
 
