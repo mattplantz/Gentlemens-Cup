@@ -151,6 +151,13 @@ def get_db():
                 PRIMARY KEY (team, golfer)
             )
         """)
+        # Small key-value store for app-wide flags (e.g. the reveal state).
+        conn.execute("""
+            CREATE TABLE IF NOT EXISTS meta (
+                key TEXT PRIMARY KEY,
+                value TEXT
+            )
+        """)
 
         # Write-ahead log (this is the "nice to have" from #4). Every save
         # attempt is recorded here BEFORE it's applied. If the save completes
@@ -587,111 +594,355 @@ def get_golfer_for_team_group(team, group_num):
     return None
 
 
+# ---------------------------------------------------------------------------
+# Reveal state + access codes for the Team Setup / grand-reveal flow
+# ---------------------------------------------------------------------------
+# Two independent mechanisms doing two different jobs:
+#   * Per-team codes gate ENTRY - before the reveal, a team can only see/edit
+#     its own config, not peek at rivals'. (You need a code so the app knows
+#     which team you are.)
+#   * The commissioner code gates the GRAND REVEAL - only the commissioner can
+#     flip everything open Thursday night, and can re-lock if clicked early.
+#
+# All four codes live in Streamlit secrets (secrets.toml), NOT in this file,
+# so they stay out of the public GitHub repo. Expected secrets layout:
+#
+#   [team_codes]
+#   "Young Guns" = "your-code-here"
+#   "OGs"        = "your-code-here"
+#   "Mids"       = "your-code-here"
+#   commissioner = "your-code-here"
+#
+# If secrets aren't configured yet, the app falls back to obvious placeholder
+# codes and shows a warning, so it still runs locally before you set them up.
+_PLACEHOLDER_TEAM_CODES = {team: f"team-{i+1}" for i, team in enumerate(TEAMS)}
+_PLACEHOLDER_COMMISSIONER_CODE = "commish"
+
+
+def _secrets_configured():
+    try:
+        return "team_codes" in st.secrets and "commissioner" in st.secrets
+    except Exception:
+        return False
+
+
+def check_team_code(team, code):
+    """True if `code` matches the configured (or placeholder) code for `team`."""
+    code = (code or "").strip()
+    if not code:
+        return False
+    try:
+        expected = st.secrets["team_codes"][team]
+    except Exception:
+        expected = _PLACEHOLDER_TEAM_CODES[team]
+    return code == expected
+
+
+def check_commissioner_code(code):
+    code = (code or "").strip()
+    if not code:
+        return False
+    try:
+        expected = st.secrets["commissioner"]
+    except Exception:
+        expected = _PLACEHOLDER_COMMISSIONER_CODE
+    return code == expected
+
+
+def is_revealed():
+    """Has the commissioner triggered the grand reveal? Persistent, app-wide."""
+    conn = get_db()
+    row = conn.execute("SELECT value FROM meta WHERE key = 'revealed'").fetchone()
+    return bool(row and row['value'] == '1')
+
+
+def set_revealed(state):
+    conn = get_db()
+    with _db_lock:
+        conn.execute("""
+            INSERT INTO meta (key, value) VALUES ('revealed', ?)
+            ON CONFLICT(key) DO UPDATE SET value = excluded.value
+        """, ('1' if state else '0',))
+        conn.commit()
+
+
+def unlocked_team():
+    """The team the current session has unlocked for editing, if any."""
+    return st.session_state.get('unlocked_team')
+
+
+def _render_team_editor(team):
+    """The roster / partnerships / assignments editing UI for one team."""
+    roster = get_roster(team)
+
+    # --- Roster ---------------------------------------------------
+    st.markdown("#### Roster")
+    col_a, col_b = st.columns([3, 1])
+    with col_a:
+        new_golfer = st.text_input("Add golfer:", key=f"new_golfer_{team}", label_visibility="collapsed",
+                                    placeholder="Golfer name")
+    with col_b:
+        if st.button("Add", key=f"add_golfer_{team}", use_container_width=True):
+            if new_golfer.strip():
+                add_golfer(team, new_golfer)
+                st.rerun()
+
+    if roster:
+        for golfer in roster:
+            rcol1, rcol2 = st.columns([5, 1])
+            rcol1.markdown(f"- {golfer}")
+            if rcol2.button("Remove", key=f"remove_{team}_{golfer}"):
+                remove_golfer(team, golfer)
+                st.rerun()
+    else:
+        st.info("No golfers added yet.")
+
+    st.divider()
+
+    # --- Round 1 partnerships --------------------------------------
+    st.markdown("#### Round 1 Partnerships (Scramble / Alt Shot)")
+    if len(roster) < 2:
+        st.caption("Add at least 2 golfers to the roster to create a partnership.")
+    else:
+        pcol1, pcol2, pcol3, pcol4 = st.columns([1.2, 1.5, 1.5, 1])
+        with pcol1:
+            fmt = st.selectbox("Format:", ["Scramble", "Alt Shot"], key=f"fmt_{team}")
+        with pcol2:
+            g1 = st.selectbox("Golfer 1:", roster, key=f"g1_{team}")
+        with pcol3:
+            g2_options = [g for g in roster if g != g1]
+            g2 = st.selectbox("Golfer 2:", g2_options, key=f"g2_{team}") if g2_options else None
+        with pcol4:
+            st.markdown("&nbsp;")
+            if st.button("Add Pair", key=f"add_partnership_{team}", use_container_width=True):
+                if g2:
+                    add_partnership(team, fmt, g1, g2)
+                    st.rerun()
+
+    partnerships = get_partnerships(team)
+    if partnerships:
+        for p in partnerships:
+            label = f"**{p['format']}**: {p['golfer1']} & {p['golfer2']}"
+            prow1, prow2 = st.columns([5, 1])
+            prow1.markdown(f"- {label}")
+            if prow2.button("Remove", key=f"remove_partnership_{team}_{p['partnership_num']}"):
+                remove_partnership(team, p['partnership_num'])
+                st.rerun()
+    else:
+        st.caption("No partnerships set yet.")
+
+    st.divider()
+
+    # --- Round 2 group assignments -----------------------------------
+    st.markdown("#### Round 2 Group Assignments (Skins)")
+    if not roster:
+        st.caption("Add golfers to the roster to assign them to groups.")
+    else:
+        assignments = get_day2_assignments(team)
+        group_labels = ["Unassigned"] + [f"Group {g}" for g in GROUPS]
+
+        for golfer in roster:
+            current_group = assignments.get(golfer)
+            current_index = group_labels.index(f"Group {current_group}") if current_group else 0
+            acol1, acol2 = st.columns([3, 2])
+            acol1.markdown(f"**{golfer}**")
+            chosen = acol2.selectbox(
+                "Group:", group_labels, index=current_index,
+                key=f"assign_{team}_{golfer}", label_visibility="collapsed"
+            )
+            new_group = None if chosen == "Unassigned" else int(chosen.split(" ")[1])
+            if new_group != current_group:
+                if new_group is not None:
+                    conflict = next((g for g, grp in assignments.items()
+                                      if grp == new_group and g != golfer), None)
+                    if conflict:
+                        st.warning(f"{conflict} is already assigned to Group {new_group} for {team}.")
+                set_day2_assignment(team, golfer, new_group)
+                st.rerun()
+
+        st.caption("Group coverage: " + ", ".join(
+            f"G{g}: {get_golfer_for_team_group(team, g) or '—'}" for g in GROUPS
+        ))
+
+
+def _render_team_readonly(team):
+    """Read-only view of a team's config, shown after the reveal."""
+    roster = get_roster(team)
+    partnerships = get_partnerships(team)
+
+    st.markdown("#### Roster")
+    if roster:
+        st.markdown("\n".join(f"- {g}" for g in roster))
+    else:
+        st.caption("No golfers.")
+
+    st.markdown("#### Round 1 Partnerships")
+    if partnerships:
+        for p in partnerships:
+            st.markdown(f"- **{p['format']}**: {p['golfer1']} & {p['golfer2']}")
+    else:
+        st.caption("No partnerships set.")
+
+    st.markdown("#### Round 2 Group Assignments (Skins)")
+    st.markdown("\n".join(
+        f"- Group {g}: **{get_golfer_for_team_group(team, g) or '—'}**" for g in GROUPS
+    ))
+
+
 def team_setup_page():
-    """Configure each team's roster, Round 1 partnerships, and Round 2 (skins) group assignments."""
+    """Configure each team's roster, Round 1 partnerships, and Round 2 (skins) group assignments.
+
+    Before the reveal: a team must enter its own code to see/edit its config;
+    rival teams stay hidden. After the commissioner reveals, everything is open
+    and read-only here (see the Grand Reveal page for the fun presentation)."""
     st.title("⚙️ Team Setup")
+
+    if not _secrets_configured():
+        st.warning(
+            "⚠️ Team & commissioner codes aren't configured in Streamlit secrets yet, "
+            "so placeholder codes are in effect (team codes: `team-1` / `team-2` / `team-3` "
+            "for the three teams in order; commissioner: `commish`). "
+            "Set real codes in your app's secrets before the tournament - see the code "
+            "comments for the exact format."
+        )
+
+    # After the reveal, Team Setup becomes an open read-only board.
+    if is_revealed():
+        st.success("🎉 Assignments have been revealed! Here's every team's config.")
+        st.caption("Head to the **Grand Reveal** page for the group-by-group presentation.")
+        tabs = st.tabs(TEAMS)
+        for team, tab in zip(TEAMS, tabs):
+            with tab:
+                _render_team_readonly(team)
+        return
+
+    # Pre-reveal: entry phase. Each session unlocks exactly one team via its code.
     st.markdown(
-        "Set each team's roster, pair golfers up for **Round 1 (Scramble / Alt Shot)**, "
-        "and assign each golfer to a **group (1-5) for Round 2 (Skins)**. "
-        "Group assignments determine which of the 5 skins groups a golfer plays in."
+        "Enter your **team code** to set up your roster, Round 1 partnerships, and "
+        "Round 2 (skins) group assignments. Everything you enter stays hidden from the "
+        "other teams until the commissioner's grand reveal."
     )
 
-    tabs = st.tabs(TEAMS)
+    current = unlocked_team()
 
-    for team, tab in zip(TEAMS, tabs):
-        with tab:
-            roster = get_roster(team)
-
-            # --- Roster ---------------------------------------------------
-            st.markdown("#### Roster")
-            col_a, col_b = st.columns([3, 1])
-            with col_a:
-                new_golfer = st.text_input("Add golfer:", key=f"new_golfer_{team}", label_visibility="collapsed",
-                                            placeholder="Golfer name")
-            with col_b:
-                if st.button("Add", key=f"add_golfer_{team}", use_container_width=True):
-                    if new_golfer.strip():
-                        add_golfer(team, new_golfer)
-                        st.rerun()
-
-            if roster:
-                for golfer in roster:
-                    rcol1, rcol2 = st.columns([5, 1])
-                    rcol1.markdown(f"- {golfer}")
-                    if rcol2.button("Remove", key=f"remove_{team}_{golfer}"):
-                        remove_golfer(team, golfer)
-                        st.rerun()
+    if current is None:
+        col1, col2 = st.columns([1, 1])
+        with col1:
+            chosen_team = st.selectbox("Your team:", TEAMS, key="unlock_team_select")
+        with col2:
+            entered = st.text_input("Team code:", type="password", key="unlock_team_code")
+        if st.button("Unlock my team"):
+            if check_team_code(chosen_team, entered):
+                st.session_state.unlocked_team = chosen_team
+                st.rerun()
             else:
-                st.info("No golfers added yet.")
+                st.error("That code doesn't match that team. Try again.")
+        st.info("🔒 Each team's setup is private until the grand reveal.")
+        return
 
-            st.divider()
+    # A team is unlocked for this session.
+    top1, top2 = st.columns([4, 1])
+    with top1:
+        st.markdown(f"### Editing: {current}")
+        st.caption("Freely editable until the reveal - no need to 'submit'.")
+    with top2:
+        if st.button("Switch team", use_container_width=True):
+            st.session_state.pop('unlocked_team', None)
+            st.rerun()
 
-            # --- Round 1 partnerships --------------------------------------
-            st.markdown("#### Round 1 Partnerships (Scramble / Alt Shot)")
-            if len(roster) < 2:
-                st.caption("Add at least 2 golfers to the roster to create a partnership.")
-            else:
-                pcol1, pcol2, pcol3, pcol4 = st.columns([1.2, 1.5, 1.5, 1])
-                with pcol1:
-                    fmt = st.selectbox("Format:", ["Scramble", "Alt Shot"], key=f"fmt_{team}")
-                with pcol2:
-                    g1 = st.selectbox("Golfer 1:", roster, key=f"g1_{team}")
-                with pcol3:
-                    g2_options = [g for g in roster if g != g1]
-                    g2 = st.selectbox("Golfer 2:", g2_options, key=f"g2_{team}") if g2_options else None
-                with pcol4:
-                    st.markdown("&nbsp;")
-                    if st.button("Add Pair", key=f"add_partnership_{team}", use_container_width=True):
-                        if g2:
-                            add_partnership(team, fmt, g1, g2)
-                            st.rerun()
+    _render_team_editor(current)
 
-            partnerships = get_partnerships(team)
-            if partnerships:
-                for p in partnerships:
-                    label = f"**{p['format']}**: {p['golfer1']} & {p['golfer2']}"
-                    prow1, prow2 = st.columns([5, 1])
-                    prow1.markdown(f"- {label}")
-                    if prow2.button("Remove", key=f"remove_partnership_{team}_{p['partnership_num']}"):
-                        remove_partnership(team, p['partnership_num'])
-                        st.rerun()
-            else:
-                st.caption("No partnerships set yet.")
 
-            st.divider()
+def grand_reveal_page():
+    """Commissioner-controlled grand reveal of all groupings, presented group by group."""
+    st.title("🎭 The Grand Reveal")
 
-            # --- Round 2 group assignments -----------------------------------
-            st.markdown("#### Round 2 Group Assignments (Skins)")
-            if not roster:
-                st.caption("Add golfers to the roster to assign them to groups.")
-            else:
-                assignments = get_day2_assignments(team)
-                group_labels = ["Unassigned"] + [f"Group {g}" for g in GROUPS]
+    revealed = is_revealed()
 
-                for golfer in roster:
-                    current_group = assignments.get(golfer)
-                    current_index = group_labels.index(f"Group {current_group}") if current_group else 0
-                    acol1, acol2 = st.columns([3, 2])
-                    acol1.markdown(f"**{golfer}**")
-                    chosen = acol2.selectbox(
-                        "Group:", group_labels, index=current_index,
-                        key=f"assign_{team}_{golfer}", label_visibility="collapsed"
-                    )
-                    new_group = None if chosen == "Unassigned" else int(chosen.split(" ")[1])
-                    if new_group != current_group:
-                        # Warn on duplicate group assignment within the same team
-                        if new_group is not None:
-                            conflict = next((g for g, grp in assignments.items()
-                                              if grp == new_group and g != golfer), None)
-                            if conflict:
-                                st.warning(f"{conflict} is already assigned to Group {new_group} for {team}.")
-                        set_day2_assignment(team, golfer, new_group)
-                        st.rerun()
+    # --- Commissioner controls -------------------------------------------
+    with st.expander("🔑 Commissioner controls", expanded=not revealed):
+        if not revealed:
+            st.markdown("Enter the commissioner code, then reveal when you're ready.")
+            code = st.text_input("Commissioner code:", type="password", key="commish_code_reveal")
+            if st.button("🎉 REVEAL THE GROUPINGS", type="primary"):
+                if check_commissioner_code(code):
+                    set_revealed(True)
+                    st.session_state.reveal_step = 0  # start the group-by-group walk
+                    st.balloons()
+                    st.rerun()
+                else:
+                    st.error("Incorrect commissioner code.")
+        else:
+            st.success("Groupings are revealed.")
+            code = st.text_input("Commissioner code (to re-lock):", type="password", key="commish_code_relock")
+            if st.button("🔒 Re-lock (hide again)"):
+                if check_commissioner_code(code):
+                    set_revealed(False)
+                    st.session_state.pop('reveal_step', None)
+                    st.rerun()
+                else:
+                    st.error("Incorrect commissioner code.")
 
-                # Quick summary of coverage across the 5 groups
-                st.caption("Group coverage: " + ", ".join(
-                    f"G{g}: {get_golfer_for_team_group(team, g) or '—'}" for g in GROUPS
-                ))
+    if not revealed:
+        st.info("🔒 The groupings are sealed. Waiting for the commissioner to reveal them Thursday night.")
+        # Show how many teams are locked in, without leaking any names
+        ready = sum(1 for team in TEAMS if any(
+            get_golfer_for_team_group(team, g) for g in GROUPS))
+        st.caption(f"{ready} of {len(TEAMS)} teams have entered assignments.")
+        return
+
+    # --- Revealed: group-by-group presentation ---------------------------
+    st.markdown("### Round 2 Skins Groups")
+    st.caption("Each group has one golfer from every team going head-to-head for skins.")
+
+    if 'reveal_step' not in st.session_state:
+        st.session_state.reveal_step = len(GROUPS)  # already fully revealed on revisit
+
+    step = st.session_state.reveal_step
+
+    nav1, nav2, nav3 = st.columns([1, 1, 2])
+    with nav1:
+        if st.button("⬅️ Back", disabled=step <= 0):
+            st.session_state.reveal_step = max(0, step - 1)
+            st.rerun()
+    with nav2:
+        if st.button("Reveal next ➡️", disabled=step >= len(GROUPS), type="primary"):
+            st.session_state.reveal_step = min(len(GROUPS), step + 1)
+            st.rerun()
+    with nav3:
+        if st.button("Show all"):
+            st.session_state.reveal_step = len(GROUPS)
+            st.rerun()
+
+    st.progress(step / len(GROUPS), text=f"{step} / {len(GROUPS)} groups revealed")
+
+    # Show the first `step` groups
+    for g in GROUPS[:step]:
+        st.markdown(f"#### 🏌️ Group {g}")
+        cols = st.columns(len(TEAMS))
+        for col, team in zip(cols, TEAMS):
+            golfer = get_golfer_for_team_group(team, g)
+            with col:
+                st.markdown(f"**{team}**")
+                st.markdown(f"### {golfer or '—'}")
+
+    if step < len(GROUPS):
+        st.info(f"👀 {len(GROUPS) - step} group(s) still hidden - hit **Reveal next** to continue the suspense.")
+
+    # --- Round 1 partnerships (also hidden until reveal) -----------------
+    if step >= len(GROUPS):
+        st.divider()
+        st.markdown("### Round 1 Partnerships")
+        cols = st.columns(len(TEAMS))
+        for col, team in zip(cols, TEAMS):
+            with col:
+                st.markdown(f"#### {team}")
+                partnerships = get_partnerships(team)
+                if partnerships:
+                    for p in partnerships:
+                        st.markdown(f"- **{p['format']}**: {p['golfer1']} & {p['golfer2']}")
+                else:
+                    st.caption("None set.")
 
 
 # ---------------------------------------------------------------------------
@@ -974,7 +1225,7 @@ def day1_scoring_page():
         selected_team = st.selectbox("Select Team:", TEAMS)
         selected_hole = st.selectbox("Select Hole:", HOLES)
 
-        partnerships = get_partnerships(selected_team)
+        partnerships = get_partnerships(selected_team) if is_revealed() else []
         if partnerships:
             st.caption("**Partnerships:**")
             for p in partnerships:
@@ -1059,9 +1310,13 @@ def day2_scoring_page():
         selected_hole = st.selectbox("Select Hole:", DAY2_HOLES, key="day2_hole")
 
         st.caption("**Group roster:**")
+        _revealed = is_revealed()
         for team in TEAMS:
-            golfer = get_golfer_for_team_group(team, selected_group)
-            st.caption(f"{team}: {golfer or '— unassigned —'}")
+            if _revealed:
+                golfer = get_golfer_for_team_group(team, selected_group)
+                st.caption(f"{team}: {golfer or '— unassigned —'}")
+            else:
+                st.caption(f"{team}: 🔒 hidden until reveal")
 
     with col2:
         hole_info = DAY2_COURSE[selected_hole]
@@ -1079,7 +1334,7 @@ def day2_scoring_page():
         for i, team in enumerate(TEAMS):
             key = f"{selected_group}_{selected_hole}_{team}"
             existing_score = st.session_state.get('day2_scores', {}).get(key, {}).get('score', hole_info['par'])
-            golfer = get_golfer_for_team_group(team, selected_group)
+            golfer = get_golfer_for_team_group(team, selected_group) if is_revealed() else None
             label = f"{team} ({golfer}) Score:" if golfer else f"{team} Score:"
 
             with cols[i]:
@@ -1282,7 +1537,8 @@ def main():
     st.sidebar.title("🏌️‍♂️ The Gentlemen's Cup")
     page = st.sidebar.radio(
         "Navigate:",
-        ["🏆 Leaderboard", "📊 Day 1 Scoring", "🎯 Day 2 Scoring", "⚙️ Team Setup", "📜 Tournament History"]
+        ["🏆 Leaderboard", "📊 Day 1 Scoring", "🎯 Day 2 Scoring", "⚙️ Team Setup",
+         "🎭 Grand Reveal", "📜 Tournament History"]
     )
 
     st.sidebar.divider()
@@ -1296,6 +1552,8 @@ def main():
         day2_scoring_page()
     elif page == "⚙️ Team Setup":
         team_setup_page()
+    elif page == "🎭 Grand Reveal":
+        grand_reveal_page()
     elif page == "📜 Tournament History":
         history_page()
 
