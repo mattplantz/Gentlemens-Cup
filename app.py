@@ -1044,24 +1044,28 @@ def grand_reveal_page():
     st.progress(step / _TOTAL_REVEAL_STEPS,
                 text=f"{step} / {_TOTAL_REVEAL_STEPS} revealed")
 
-    # ---- Phase 1: Round 1 roles, team by team --------------------------
-    st.markdown("### Round 1 — Scramble / Alt Shot Roles")
     teams_shown = min(step, n_teams)
-    if teams_shown == 0:
-        st.caption("First up: Round 1 roles, one team at a time.")
-    for team in R1_REVEAL_ORDER[:teams_shown]:
-        _render_one_team_day1(team)
-    if teams_shown < n_teams:
-        remaining = n_teams - teams_shown
-        st.info(f"👀 {remaining} team(s) still hidden — hit **{next_label}** to keep going.")
+    groups_shown = max(0, step - n_teams)
 
-    # ---- Phase 2: Round 2 skins groups, one at a time ------------------
-    if step >= n_teams:
-        st.divider()
+    # Newest reveal sits at the TOP, right under the button, so there's no
+    # scrolling down to see it and back up to reveal again. Earlier reveals
+    # stack below. Reveal order is R1 teams then R2 groups, so on screen the
+    # most-recent (a group, once we're in phase 2) is topmost, with the
+    # Round 1 teams at the bottom.
+
+    # "Still hidden" hint always at the very top.
+    if step < _TOTAL_REVEAL_STEPS:
+        if step < n_teams:
+            remaining = n_teams - teams_shown
+            st.info(f"👀 Round 1: {remaining} team(s) still hidden — hit **{next_label}** to keep going.")
+        else:
+            st.info(f"👀 Round 2: {len(GROUPS) - groups_shown} group(s) still hidden — hit **{next_label}** to continue the suspense.")
+
+    # ---- Phase 2 (on top): Round 2 skins groups, newest first ----------
+    if groups_shown > 0:
         st.markdown("### Round 2 — Skins Groups")
         st.caption("Each group has one golfer from every team going head-to-head for skins.")
-        groups_shown = step - n_teams
-        for g in GROUPS[:groups_shown]:
+        for g in reversed(GROUPS[:groups_shown]):
             st.markdown(f"#### 🏌️ Group {g}")
             cols = st.columns(len(TEAMS))
             for col, team in zip(cols, TEAMS):
@@ -1069,10 +1073,16 @@ def grand_reveal_page():
                 with col:
                     st.markdown(f"**{team}**")
                     st.markdown(f"### {golfer or '—'}")
-        if groups_shown < len(GROUPS):
-            st.info(f"👀 {len(GROUPS) - groups_shown} group(s) still hidden — hit **{next_label}** to continue the suspense.")
+        st.divider()
 
-    # ---- Everything out: consolidated recap ----------------------------
+    # ---- Phase 1 (below): Round 1 roles, newest first ------------------
+    st.markdown("### Round 1 — Scramble / Alt Shot Roles")
+    if teams_shown == 0:
+        st.caption("First up: Round 1 roles, one team at a time.")
+    for team in reversed(R1_REVEAL_ORDER[:teams_shown]):
+        _render_one_team_day1(team)
+
+    # ---- Everything out: consolidated recap (very bottom) --------------
     if step >= _TOTAL_REVEAL_STEPS:
         st.divider()
         st.success("🎉 That's everyone!")
