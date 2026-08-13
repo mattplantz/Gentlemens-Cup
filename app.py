@@ -1110,6 +1110,14 @@ def load_history():
     return years
 
 
+def _format_supreme_leader(leader):
+    """Render a year's supreme_leader field (a name, a list of names, or None)."""
+    if not leader:
+        return '—'
+    names = leader if isinstance(leader, list) else [leader]
+    return " & ".join(f"Supreme Leader {n}" for n in names)
+
+
 def load_supreme_leaders():
     """Load the Supreme Leaders head-to-head totals, if present."""
     path = os.path.join(HISTORY_DIR, "supreme_leaders.json")
@@ -1142,11 +1150,10 @@ def history_page():
     champ_rows = []
     for year in sorted_years:
         results = years_data[year].get('results', {})
-        leader = results.get('supreme_leader')
         champ_rows.append({
             'Year': year,
             'Champion': results.get('champion', '—'),
-            'Supreme Leader': f"Supreme Leader {leader}" if leader else '—',
+            'Supreme Leader': _format_supreme_leader(results.get('supreme_leader')),
         })
     st.dataframe(pd.DataFrame(champ_rows), use_container_width=True, hide_index=True)
 
@@ -1177,8 +1184,9 @@ def history_page():
                 st.caption(f"**Day 2:** {notes['day2']}")
 
     st.markdown(f"🏆 **Champion: {results.get('champion', '—')}**")
-    if results.get('supreme_leader'):
-        st.markdown(f"👑 **Supreme Leader {results['supreme_leader']}**")
+    leader_str = _format_supreme_leader(results.get('supreme_leader'))
+    if leader_str != '—':
+        st.markdown(f"👑 **{leader_str}**")
 
     overall = results.get('overall_points', {})
     if overall:
