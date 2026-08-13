@@ -2,7 +2,7 @@
   "year": 2025,
   "format_notes": {
     "day1": "Scramble + Alternating Shot, 18 holes. Points: 11 / 7.5 / 4 (pre-2026 values; doubled to 22/15/8 starting 2026).",
-    "day2": "Individual skins, 9 holes, 5 groups (doubled to 18 holes starting 2026).",
+    "day2": "Individual skins, 9 holes, 5 groups, with carryover on ties (doubled to 18 holes starting 2026). Skin points recomputed from raw hole-by-hole scores.",
     "course_par_used_for_to_par_stats": {
       "1": 4,
       "2": 4,
@@ -59,17 +59,18 @@
       "Mids": 4.0
     },
     "day2_skins_points": {
-      "Young Guns": 24,
-      "OGs": 11,
-      "Mids": 17
+      "Young Guns": 18,
+      "OGs": 5,
+      "Mids": 18
     },
     "overall_points": {
-      "Young Guns": 39.0,
-      "OGs": 26.0,
-      "Mids": 32.0
+      "Young Guns": 33.0,
+      "OGs": 20.0,
+      "Mids": 33.0
     },
     "champion": "Young Guns",
-    "supreme_leader": "Greg"
+    "supreme_leader": "Greg",
+    "champion_note": "Young Guns and Mids tied at 33; Young Guns won the tiebreaker."
   },
   "raw_data": {
     "day1_scores": [
