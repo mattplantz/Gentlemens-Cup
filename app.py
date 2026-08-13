@@ -110,10 +110,17 @@ def get_db():
                 hole INTEGER NOT NULL,
                 team TEXT NOT NULL,
                 score INTEGER,
+                golfer TEXT,
                 timestamp TEXT,
                 PRIMARY KEY (group_num, hole, team)
             )
         """)
+        # Migration: add golfer to any pre-existing day2_scores table that
+        # lacks it, so each skins score carries the individual who made it
+        # (stamped at save time from the Day 2 group assignment).
+        d2cols = [r['name'] for r in conn.execute("PRAGMA table_info(day2_scores)").fetchall()]
+        if 'golfer' not in d2cols:
+            conn.execute("ALTER TABLE day2_scores ADD COLUMN golfer TEXT")
         conn.execute("""
             CREATE TABLE IF NOT EXISTS day2_skins (
                 group_num INTEGER NOT NULL,
@@ -218,16 +225,17 @@ def _apply_day1_score(team, hole, scramble_score, alt_shot_score, timestamp):
         conn.commit()
 
 
-def _apply_day2_score(group, hole, team, score, timestamp):
+def _apply_day2_score(group, hole, team, score, timestamp, golfer=None):
     conn = get_db()
     with _db_lock:
         conn.execute("""
-            INSERT INTO day2_scores (group_num, hole, team, score, timestamp)
-            VALUES (?, ?, ?, ?, ?)
+            INSERT INTO day2_scores (group_num, hole, team, score, golfer, timestamp)
+            VALUES (?, ?, ?, ?, ?, ?)
             ON CONFLICT(group_num, hole, team) DO UPDATE SET
                 score = excluded.score,
+                golfer = excluded.golfer,
                 timestamp = excluded.timestamp
-        """, (group, hole, team, score, timestamp))
+        """, (group, hole, team, score, golfer, timestamp))
         conn.commit()
 
 
@@ -292,9 +300,12 @@ def save_day1_score(team, hole, scramble_score, alt_shot_score):
 
 
 def save_day2_score(group, hole, team, score):
-    """Save Day 2 (skins) scores"""
+    """Save Day 2 (skins) scores, stamping the individual golfer from the
+    team's group assignment so per-golfer stats survive later reassignments."""
     timestamp = datetime.now().isoformat()
-    payload = {'group': group, 'hole': hole, 'team': team, 'score': score, 'timestamp': timestamp}
+    golfer = get_golfer_for_team_group(team, group)  # may be None if unassigned
+    payload = {'group': group, 'hole': hole, 'team': team, 'score': score,
+               'timestamp': timestamp, 'golfer': golfer}
     log_id = _log_write('day2_score', payload)
     try:
         _apply_day2_score(**payload)
@@ -305,7 +316,8 @@ def save_day2_score(group, hole, team, score):
             st.session_state.day2_scores = {}
         score_id = f"{group}_{hole}_{team}"
         st.session_state.day2_scores[score_id] = {
-            'group': group, 'hole': hole, 'team': team, 'score': score, 'timestamp': timestamp
+            'group': group, 'hole': hole, 'team': team, 'score': score,
+            'golfer': golfer, 'timestamp': timestamp
         }
     except Exception as e:
         st.error(f"Error saving score, will retry automatically: {e}")
@@ -447,7 +459,7 @@ def load_all_data():
             key = f"{row['group_num']}_{row['hole']}_{row['team']}"
             st.session_state.day2_scores[key] = {
                 'group': row['group_num'], 'hole': row['hole'], 'team': row['team'],
-                'score': row['score'], 'timestamp': row['timestamp']
+                'score': row['score'], 'golfer': row['golfer'], 'timestamp': row['timestamp']
             }
 
         # Day 2 skins + recalculate team points
@@ -617,6 +629,57 @@ def get_golfer_for_team_group(team, group_num):
         if g == group_num:
             return golfer
     return None
+
+
+def compute_golfer_skins():
+    """Per-golfer Day 2 skins tally, resolved from the stamped golfer on each
+    winning score row (falling back to the current group assignment for any
+    older rows saved before names were stamped).
+
+    Returns a list of dicts: {golfer, team, group, skins}, sorted by skins desc.
+    """
+    load_all_data()
+    scores = st.session_state.get('day2_scores', {})
+    skins = st.session_state.get('day2_skins', {})
+
+    tally = {}  # golfer -> {'team', 'group', 'skins'}
+    for skin in skins.values():
+        if not skin.get('winner') or skin.get('tied'):
+            continue
+        group = skin['group']
+        hole = skin['hole']
+        team = skin['winner']
+        points = skin.get('points_value', 1)
+
+        # Prefer the golfer stamped on that exact winning score row.
+        row = scores.get(f"{group}_{hole}_{team}", {})
+        golfer = row.get('golfer') or get_golfer_for_team_group(team, group)
+        if not golfer:
+            golfer = f"{team} (Group {group})"  # unnamed fallback
+
+        entry = tally.setdefault(golfer, {'golfer': golfer, 'team': team, 'group': group, 'skins': 0})
+        entry['skins'] += points
+
+    return sorted(tally.values(), key=lambda x: x['skins'], reverse=True)
+
+
+def golfer_skins_page():
+    """Individual skins leaderboard for the current tournament."""
+    st.title("⛳ Individual Skins Stats")
+    st.caption("Per-golfer skins for Day 2. (Day 1 is a team scramble/alt-shot, "
+               "so it has no individual scores.)")
+
+    if not is_revealed():
+        st.info("🔒 Individual stats appear after the groupings are revealed.")
+        return
+
+    rows = compute_golfer_skins()
+    if not rows:
+        st.info("No skins have been won yet.")
+        return
+
+    table_rows = [[r['golfer'], r['team'], f"Group {r['group']}", str(r['skins'])] for r in rows]
+    st.markdown(_html_table(["Golfer", "Team", "Group", "Skins"], table_rows), unsafe_allow_html=True)
 
 
 # ---------------------------------------------------------------------------
@@ -1286,6 +1349,14 @@ def history_page():
         ).sort_values('Skins Points', ascending=False)
         st.dataframe(df_skins, use_container_width=True, hide_index=True)
 
+    # Per-golfer skins, if this year recorded them
+    golfer_skins = results.get('golfer_skins')
+    if golfer_skins:
+        st.markdown("#### Day 2 - Individual Skins")
+        rows = sorted(golfer_skins, key=lambda x: x.get('skins', 0), reverse=True)
+        table_rows = [[r.get('golfer', '—'), r.get('team', '—'), str(r.get('skins', 0))] for r in rows]
+        st.markdown(_html_table(["Golfer", "Team", "Skins"], table_rows), unsafe_allow_html=True)
+
 
 # ---------------------------------------------------------------------------
 # Scoring calculations
@@ -1770,8 +1841,8 @@ def main():
     st.sidebar.title("🏌️‍♂️ The Gentlemen's Cup")
     page = st.sidebar.radio(
         "Navigate:",
-        ["🏆 Leaderboard", "📊 Day 1 Scoring", "🎯 Day 2 Scoring", "⚙️ Team Setup",
-         "🎭 Grand Reveal", "📜 Tournament History"]
+        ["🏆 Leaderboard", "📊 Day 1 Scoring", "🎯 Day 2 Scoring", "⛳ Individual Skins",
+         "⚙️ Team Setup", "🎭 Grand Reveal", "📜 Tournament History"]
     )
 
     st.sidebar.divider()
@@ -1783,6 +1854,8 @@ def main():
         day1_scoring_page()
     elif page == "🎯 Day 2 Scoring":
         day2_scoring_page()
+    elif page == "⛳ Individual Skins":
+        golfer_skins_page()
     elif page == "⚙️ Team Setup":
         team_setup_page()
     elif page == "🎭 Grand Reveal":
