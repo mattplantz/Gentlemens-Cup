@@ -1,0 +1,13 @@
+{
+  "note": "Explicit career totals as provided by the commissioner. These take precedence over per-year annotations.",
+  "head_to_head": [
+    {
+      "name": "Supreme Leader Greg",
+      "wins": 5
+    },
+    {
+      "name": "Supreme Leader Keith",
+      "wins": 3
+    }
+  ]
+}
