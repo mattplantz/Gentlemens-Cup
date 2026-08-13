@@ -1010,7 +1010,7 @@ def _render_all_skins_groups():
         for team in TEAMS:
             row[team] = get_golfer_for_team_group(team, g) or '—'
         rows.append(row)
-    st.dataframe(pd.DataFrame(rows), use_container_width=True, hide_index=True)
+    show_table(pd.DataFrame(rows))
 
 
 # Reveal sequence: first Round 1, team by team in this order, then the 5
@@ -1230,6 +1230,17 @@ def _html_table(headers, rows, highlight_first_col=False):
     )
 
 
+def show_table(df, highlight_first_col=False):
+    """Render a pandas DataFrame as the blue-header HTML table.
+
+    Drop-in replacement for st.dataframe throughout the app so every table
+    gets the same Old-Glory-blue header styling."""
+    headers = [str(c) for c in df.columns]
+    rows = [["" if pd.isna(v) else str(v) for v in row] for row in df.itertuples(index=False)]
+    st.markdown(_html_table(headers, rows, highlight_first_col=highlight_first_col),
+                unsafe_allow_html=True)
+
+
 def load_supreme_leaders():
     """Load the Supreme Leaders head-to-head totals, if present."""
     path = os.path.join(HISTORY_DIR, "supreme_leaders.json")
@@ -1304,7 +1315,7 @@ def history_page():
         df_overall = pd.DataFrame(
             [{'Team': t, 'Overall Points': p} for t, p in overall.items()]
         ).sort_values('Overall Points', ascending=False)
-        st.dataframe(df_overall, use_container_width=True, hide_index=True)
+        show_table(df_overall)
 
     # Detailed scoring tables only exist for years with hole-by-hole data.
     has_detail = any(results.get(k) for k in
@@ -1326,7 +1337,7 @@ def history_page():
                 'Score': totals.get('scramble'), 'To Par': totals.get('scramble_to_par')
             })
         if rows:
-            st.dataframe(pd.DataFrame(rows), use_container_width=True, hide_index=True)
+            show_table(pd.DataFrame(rows))
 
     with col2:
         st.markdown("#### Day 1 - Alt Shot")
@@ -1339,7 +1350,7 @@ def history_page():
                 'Score': totals.get('alt_shot'), 'To Par': totals.get('alt_shot_to_par')
             })
         if rows:
-            st.dataframe(pd.DataFrame(rows), use_container_width=True, hide_index=True)
+            show_table(pd.DataFrame(rows))
 
     st.markdown("#### Day 2 - Skins Points")
     skins_points = results.get('day2_skins_points', {})
@@ -1347,7 +1358,7 @@ def history_page():
         df_skins = pd.DataFrame(
             [{'Team': t, 'Skins Points': p} for t, p in skins_points.items()]
         ).sort_values('Skins Points', ascending=False)
-        st.dataframe(df_skins, use_container_width=True, hide_index=True)
+        show_table(df_skins)
 
     # Per-golfer skins, if this year recorded them
     golfer_skins = results.get('golfer_skins')
@@ -1583,7 +1594,7 @@ def day1_scoring_page():
         df = pd.DataFrame(team_scores, columns=['Hole', 'Scramble', 'Alt Shot', 'Par', 'Scramble To Par', 'Alt Shot To Par'])
         df['Scramble To Par'] = df['Scramble To Par'].apply(format_score_to_par)
         df['Alt Shot To Par'] = df['Alt Shot To Par'].apply(format_score_to_par)
-        st.dataframe(df, use_container_width=True)
+        show_table(df)
 
         st.markdown("### Running Totals")
         scramble_total = sum(score[1] for score in team_scores)
@@ -1702,7 +1713,7 @@ def display_group_scorecard(group):
 
     if scorecard_data:
         df = pd.DataFrame(scorecard_data)
-        st.dataframe(df, use_container_width=True)
+        show_table(df)
 
 
 def leaderboard_page():
@@ -1735,7 +1746,7 @@ def leaderboard_page():
 
         leaderboard_data.sort(key=lambda x: float(x['Total Points']), reverse=True)
         df_leaderboard = pd.DataFrame(leaderboard_data)
-        st.dataframe(df_leaderboard, use_container_width=True)
+        show_table(df_leaderboard)
 
         if not day1_results['all_teams_complete']:
             st.info("⏳ Day 1 points will be awarded once all teams complete their rounds")
@@ -1765,7 +1776,7 @@ def leaderboard_page():
                 int(x['Score'].split(' (')[0]) if x['Score'] != 'No scores' else 999
             ))
             df_scramble = pd.DataFrame(scramble_data)
-            st.dataframe(df_scramble, use_container_width=True)
+            show_table(df_scramble)
 
         with col2:
             st.markdown("#### Alternating Shot Competition")
@@ -1789,7 +1800,7 @@ def leaderboard_page():
                 int(x['Score'].split(' (')[0]) if x['Score'] != 'No scores' else 999
             ))
             df_alt_shot = pd.DataFrame(alt_shot_data)
-            st.dataframe(df_alt_shot, use_container_width=True)
+            show_table(df_alt_shot)
 
         st.markdown("### Day 2 Skins Summary")
         skins_summary = []
@@ -1814,7 +1825,7 @@ def leaderboard_page():
             })
 
         df_skins = pd.DataFrame(skins_summary)
-        st.dataframe(df_skins, use_container_width=True)
+        show_table(df_skins)
 
     col1, col2, col3 = st.columns([1, 1, 2])
 
