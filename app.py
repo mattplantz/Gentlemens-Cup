@@ -134,13 +134,11 @@ def get_db():
             )
         """)
         conn.execute("""
-            CREATE TABLE IF NOT EXISTS day1_partnerships (
+            CREATE TABLE IF NOT EXISTS day1_roles (
                 team TEXT NOT NULL,
-                partnership_num INTEGER NOT NULL,
-                format TEXT,
-                golfer1 TEXT,
-                golfer2 TEXT,
-                PRIMARY KEY (team, partnership_num)
+                slot TEXT NOT NULL,
+                golfer TEXT,
+                PRIMARY KEY (team, slot)
             )
         """)
         conn.execute("""
@@ -521,47 +519,74 @@ def remove_golfer(team, golfer):
     with _db_lock:
         conn.execute("DELETE FROM roster WHERE team = ? AND golfer = ?", (team, golfer))
         conn.execute("DELETE FROM day2_assignments WHERE team = ? AND golfer = ?", (team, golfer))
-        conn.execute("""
-            UPDATE day1_partnerships SET golfer1 = NULL
-            WHERE team = ? AND golfer1 = ?
-        """, (team, golfer))
-        conn.execute("""
-            UPDATE day1_partnerships SET golfer2 = NULL
-            WHERE team = ? AND golfer2 = ?
-        """, (team, golfer))
+        # Clear this golfer out of any Day 1 role slot they occupied
+        conn.execute("UPDATE day1_roles SET golfer = NULL WHERE team = ? AND golfer = ?", (team, golfer))
         conn.commit()
 
 
-def get_partnerships(team):
-    """Round 1 (Scramble/Alt Shot) partnerships for a team."""
+# Day 1 role slots. Each team fills all five: one all-time scrambler and two pairs.
+DAY1_SLOTS = ['scrambler', 'p1a', 'p1b', 'p2a', 'p2b']
+SCRAMBLER_LABEL = "All-time Scrambler / Beer Drinker"
+
+
+def get_day1_roles(team):
+    """{slot: golfer} for a team's Day 1 role assignments (missing slots absent)."""
     conn = get_db()
-    rows = conn.execute(
-        "SELECT * FROM day1_partnerships WHERE team = ? ORDER BY partnership_num", (team,)
-    ).fetchall()
-    return [dict(r) for r in rows]
+    rows = conn.execute("SELECT slot, golfer FROM day1_roles WHERE team = ?", (team,)).fetchall()
+    return {r['slot']: r['golfer'] for r in rows if r['golfer']}
 
 
-def add_partnership(team, fmt, golfer1, golfer2):
+def set_day1_role(team, slot, golfer):
     conn = get_db()
     with _db_lock:
-        existing = conn.execute(
-            "SELECT COALESCE(MAX(partnership_num), 0) AS m FROM day1_partnerships WHERE team = ?", (team,)
-        ).fetchone()
-        next_num = existing['m'] + 1
-        conn.execute(
-            "INSERT INTO day1_partnerships (team, partnership_num, format, golfer1, golfer2) VALUES (?, ?, ?, ?, ?)",
-            (team, next_num, fmt, golfer1, golfer2)
-        )
+        if golfer is None:
+            conn.execute("DELETE FROM day1_roles WHERE team = ? AND slot = ?", (team, slot))
+        else:
+            conn.execute("""
+                INSERT INTO day1_roles (team, slot, golfer) VALUES (?, ?, ?)
+                ON CONFLICT(team, slot) DO UPDATE SET golfer = excluded.golfer
+            """, (team, slot, golfer))
         conn.commit()
 
 
-def remove_partnership(team, partnership_num):
-    conn = get_db()
-    with _db_lock:
-        conn.execute(
-            "DELETE FROM day1_partnerships WHERE team = ? AND partnership_num = ?", (team, partnership_num)
-        )
-        conn.commit()
+def day1_rotation(team):
+    """Resolve a team's Day 1 roles into the front/back scramble & alt-shot rotation.
+
+    Front 9: (Pair 1 + Scrambler) scramble | Pair 2 alt shot
+    Back 9:  (Pair 2 + Scrambler) scramble | Pair 1 alt shot
+    """
+    roles = get_day1_roles(team)
+    scrambler = roles.get('scrambler')
+    pair1 = [roles.get('p1a'), roles.get('p1b')]
+    pair2 = [roles.get('p2a'), roles.get('p2b')]
+    return {
+        'scrambler': scrambler,
+        'pair1': [g for g in pair1 if g],
+        'pair2': [g for g in pair2 if g],
+        'front_scramble': [g for g in ([scrambler] + pair1) if g],
+        'front_alt_shot': [g for g in pair2 if g],
+        'back_scramble': [g for g in ([scrambler] + pair2) if g],
+        'back_alt_shot': [g for g in pair1 if g],
+    }
+
+
+def day1_role_issues(team):
+    """Return a list of human-readable problems with a team's Day 1 role setup."""
+    roles = get_day1_roles(team)
+    assigned = [g for g in roles.values() if g]
+    issues = []
+    # Duplicates across slots
+    seen = {}
+    for slot, g in roles.items():
+        seen.setdefault(g, []).append(slot)
+    for g, slots in seen.items():
+        if len(slots) > 1:
+            issues.append(f"{g} is assigned to more than one role.")
+    # Completeness
+    missing = [s for s in DAY1_SLOTS if not roles.get(s)]
+    if missing:
+        issues.append("Not all five roles are filled yet.")
+    return issues
 
 
 def get_day2_assignments(team):
@@ -699,37 +724,52 @@ def _render_team_editor(team):
 
     st.divider()
 
-    # --- Round 1 partnerships --------------------------------------
-    st.markdown("#### Round 1 Partnerships (Scramble / Alt Shot)")
-    if len(roster) < 2:
-        st.caption("Add at least 2 golfers to the roster to create a partnership.")
+    # --- Round 1 roles: 1 all-time scrambler + 2 pairs --------------
+    st.markdown("#### Round 1 Roles (Scramble / Alt Shot)")
+    st.caption(
+        "Pick your **All-time Scrambler / Beer Drinker** (scrambles both nines) and "
+        "two pairs. Front 9: Pair 1 + Scrambler scramble, Pair 2 alt shot. "
+        "Back 9: Pair 2 + Scrambler scramble, Pair 1 alt shot."
+    )
+    if len(roster) < 5:
+        st.info(f"Add all 5 golfers to the roster to set roles (currently {len(roster)}).")
     else:
-        pcol1, pcol2, pcol3, pcol4 = st.columns([1.2, 1.5, 1.5, 1])
-        with pcol1:
-            fmt = st.selectbox("Format:", ["Scramble", "Alt Shot"], key=f"fmt_{team}")
-        with pcol2:
-            g1 = st.selectbox("Golfer 1:", roster, key=f"g1_{team}")
-        with pcol3:
-            g2_options = [g for g in roster if g != g1]
-            g2 = st.selectbox("Golfer 2:", g2_options, key=f"g2_{team}") if g2_options else None
-        with pcol4:
-            st.markdown("&nbsp;")
-            if st.button("Add Pair", key=f"add_partnership_{team}", use_container_width=True):
-                if g2:
-                    add_partnership(team, fmt, g1, g2)
-                    st.rerun()
+        roles = get_day1_roles(team)
+        blank = "— none —"
 
-    partnerships = get_partnerships(team)
-    if partnerships:
-        for p in partnerships:
-            label = f"**{p['format']}**: {p['golfer1']} & {p['golfer2']}"
-            prow1, prow2 = st.columns([5, 1])
-            prow1.markdown(f"- {label}")
-            if prow2.button("Remove", key=f"remove_partnership_{team}_{p['partnership_num']}"):
-                remove_partnership(team, p['partnership_num'])
+        def role_selectbox(slot, label):
+            options = [blank] + roster
+            current = roles.get(slot)
+            idx = options.index(current) if current in options else 0
+            chosen = st.selectbox(label, options, index=idx, key=f"role_{team}_{slot}")
+            new_val = None if chosen == blank else chosen
+            if new_val != roles.get(slot):
+                set_day1_role(team, slot, new_val)
                 st.rerun()
-    else:
-        st.caption("No partnerships set yet.")
+
+        role_selectbox('scrambler', SCRAMBLER_LABEL)
+        pc1, pc2 = st.columns(2)
+        with pc1:
+            st.markdown("**Pair 1**")
+            role_selectbox('p1a', "Pair 1 — Golfer A")
+            role_selectbox('p1b', "Pair 1 — Golfer B")
+        with pc2:
+            st.markdown("**Pair 2**")
+            role_selectbox('p2a', "Pair 2 — Golfer A")
+            role_selectbox('p2b', "Pair 2 — Golfer B")
+
+        for issue in day1_role_issues(team):
+            st.warning(issue)
+
+        # Show the resolved rotation so the whole picture is visible at once
+        rot = day1_rotation(team)
+        st.markdown("**This produces:**")
+        st.markdown(
+            f"- **Front 9 scramble:** {', '.join(rot['front_scramble']) or '—'}\n"
+            f"- **Front 9 alt shot:** {', '.join(rot['front_alt_shot']) or '—'}\n"
+            f"- **Back 9 scramble:** {', '.join(rot['back_scramble']) or '—'}\n"
+            f"- **Back 9 alt shot:** {', '.join(rot['back_alt_shot']) or '—'}"
+        )
 
     st.divider()
 
@@ -768,7 +808,7 @@ def _render_team_editor(team):
 def _render_team_readonly(team):
     """Read-only view of a team's config, shown after the reveal."""
     roster = get_roster(team)
-    partnerships = get_partnerships(team)
+    rot = day1_rotation(team)
 
     st.markdown("#### Roster")
     if roster:
@@ -776,12 +816,18 @@ def _render_team_readonly(team):
     else:
         st.caption("No golfers.")
 
-    st.markdown("#### Round 1 Partnerships")
-    if partnerships:
-        for p in partnerships:
-            st.markdown(f"- **{p['format']}**: {p['golfer1']} & {p['golfer2']}")
-    else:
-        st.caption("No partnerships set.")
+    st.markdown("#### Round 1 Roles")
+    st.markdown(f"- **{SCRAMBLER_LABEL}:** {rot['scrambler'] or '—'}")
+    st.markdown(f"- **Pair 1:** {' & '.join(rot['pair1']) or '—'}")
+    st.markdown(f"- **Pair 2:** {' & '.join(rot['pair2']) or '—'}")
+    st.markdown(
+        f"- Front 9 scramble: {', '.join(rot['front_scramble']) or '—'}  ·  "
+        f"alt shot: {', '.join(rot['front_alt_shot']) or '—'}"
+    )
+    st.markdown(
+        f"- Back 9 scramble: {', '.join(rot['back_scramble']) or '—'}  ·  "
+        f"alt shot: {', '.join(rot['back_alt_shot']) or '—'}"
+    )
 
     st.markdown("#### Round 2 Group Assignments (Skins)")
     st.markdown("\n".join(
@@ -818,7 +864,7 @@ def team_setup_page():
 
     # Pre-reveal: entry phase. Each session unlocks exactly one team via its code.
     st.markdown(
-        "Enter your **team code** to set up your roster, Round 1 partnerships, and "
+        "Enter your **team code** to set up your roster, Round 1 roles, and "
         "Round 2 (skins) group assignments. Everything you enter stays hidden from the "
         "other teams until the commissioner's grand reveal."
     )
@@ -853,6 +899,37 @@ def team_setup_page():
     _render_team_editor(current)
 
 
+def _render_all_day1_roles():
+    """Consolidated Round 1 role rotation for all teams, side by side."""
+    st.markdown("### Round 1 Roles (all teams)")
+    cols = st.columns(len(TEAMS))
+    for col, team in zip(cols, TEAMS):
+        rot = day1_rotation(team)
+        with col:
+            st.markdown(f"#### {team}")
+            st.markdown(f"🍺 **Scrambler:** {rot['scrambler'] or '—'}")
+            st.markdown(f"**Pair 1:** {' & '.join(rot['pair1']) or '—'}")
+            st.markdown(f"**Pair 2:** {' & '.join(rot['pair2']) or '—'}")
+            st.caption(
+                f"Front scramble: {', '.join(rot['front_scramble']) or '—'}\n\n"
+                f"Front alt shot: {', '.join(rot['front_alt_shot']) or '—'}\n\n"
+                f"Back scramble: {', '.join(rot['back_scramble']) or '—'}\n\n"
+                f"Back alt shot: {', '.join(rot['back_alt_shot']) or '—'}"
+            )
+
+
+def _render_all_skins_groups():
+    """Consolidated Round 2 skins groups for all teams, all at once."""
+    st.markdown("### Round 2 Skins Groups (all at once)")
+    rows = []
+    for g in GROUPS:
+        row = {'Group': f"Group {g}"}
+        for team in TEAMS:
+            row[team] = get_golfer_for_team_group(team, g) or '—'
+        rows.append(row)
+    st.dataframe(pd.DataFrame(rows), use_container_width=True, hide_index=True)
+
+
 def grand_reveal_page():
     """Commissioner-controlled grand reveal of all groupings, presented group by group."""
     st.title("🎭 The Grand Reveal")
@@ -862,16 +939,26 @@ def grand_reveal_page():
     # --- Commissioner controls -------------------------------------------
     with st.expander("🔑 Commissioner controls", expanded=not revealed):
         if not revealed:
-            st.markdown("Enter the commissioner code, then reveal when you're ready.")
+            st.markdown("Enter the commissioner code to preview everything privately or reveal it to everyone.")
             code = st.text_input("Commissioner code:", type="password", key="commish_code_reveal")
-            if st.button("🎉 REVEAL THE GROUPINGS", type="primary"):
-                if check_commissioner_code(code):
-                    set_revealed(True)
-                    st.session_state.reveal_step = 0  # start the group-by-group walk
-                    st.balloons()
-                    st.rerun()
-                else:
-                    st.error("Incorrect commissioner code.")
+            bcol1, bcol2 = st.columns(2)
+            with bcol1:
+                if st.button("👁️ Preview all (private)", use_container_width=True):
+                    if check_commissioner_code(code):
+                        st.session_state.commish_preview = True
+                        st.rerun()
+                    else:
+                        st.error("Incorrect commissioner code.")
+            with bcol2:
+                if st.button("🎉 REVEAL TO EVERYONE", type="primary", use_container_width=True):
+                    if check_commissioner_code(code):
+                        set_revealed(True)
+                        st.session_state.reveal_step = 0  # start the group-by-group walk
+                        st.session_state.pop('commish_preview', None)
+                        st.balloons()
+                        st.rerun()
+                    else:
+                        st.error("Incorrect commissioner code.")
         else:
             st.success("Groupings are revealed.")
             code = st.text_input("Commissioner code (to re-lock):", type="password", key="commish_code_relock")
@@ -883,9 +970,19 @@ def grand_reveal_page():
                 else:
                     st.error("Incorrect commissioner code.")
 
+    # --- Pre-reveal: sealed, unless commissioner is previewing -----------
     if not revealed:
+        if st.session_state.get('commish_preview'):
+            st.warning("👁️ Commissioner preview — this is private and has NOT been revealed to anyone else.")
+            if st.button("Exit preview"):
+                st.session_state.pop('commish_preview', None)
+                st.rerun()
+            _render_all_skins_groups()
+            st.divider()
+            _render_all_day1_roles()
+            return
+
         st.info("🔒 The groupings are sealed. Waiting for the commissioner to reveal them Thursday night.")
-        # Show how many teams are locked in, without leaking any names
         ready = sum(1 for team in TEAMS if any(
             get_golfer_for_team_group(team, g) for g in GROUPS))
         st.caption(f"{ready} of {len(TEAMS)} teams have entered assignments.")
@@ -929,20 +1026,12 @@ def grand_reveal_page():
     if step < len(GROUPS):
         st.info(f"👀 {len(GROUPS) - step} group(s) still hidden - hit **Reveal next** to continue the suspense.")
 
-    # --- Round 1 partnerships (also hidden until reveal) -----------------
+    # --- Once all groups are out, show the consolidated views ------------
     if step >= len(GROUPS):
         st.divider()
-        st.markdown("### Round 1 Partnerships")
-        cols = st.columns(len(TEAMS))
-        for col, team in zip(cols, TEAMS):
-            with col:
-                st.markdown(f"#### {team}")
-                partnerships = get_partnerships(team)
-                if partnerships:
-                    for p in partnerships:
-                        st.markdown(f"- **{p['format']}**: {p['golfer1']} & {p['golfer2']}")
-                else:
-                    st.caption("None set.")
+        _render_all_skins_groups()
+        st.divider()
+        _render_all_day1_roles()
 
 
 # ---------------------------------------------------------------------------
@@ -1225,11 +1314,13 @@ def day1_scoring_page():
         selected_team = st.selectbox("Select Team:", TEAMS)
         selected_hole = st.selectbox("Select Hole:", HOLES)
 
-        partnerships = get_partnerships(selected_team) if is_revealed() else []
-        if partnerships:
-            st.caption("**Partnerships:**")
-            for p in partnerships:
-                st.caption(f"{p['format']}: {p['golfer1']} & {p['golfer2']}")
+        if is_revealed():
+            rot = day1_rotation(selected_team)
+            nine = "front" if selected_hole <= 9 else "back"
+            st.caption("**Roles this nine:**")
+            st.caption(f"🍺 Scrambler: {rot['scrambler'] or '—'}")
+            st.caption(f"Scramble: {', '.join(rot[f'{nine}_scramble']) or '—'}")
+            st.caption(f"Alt shot: {', '.join(rot[f'{nine}_alt_shot']) or '—'}")
 
     with col2:
         hole_info = DAY1_COURSE[selected_hole]
