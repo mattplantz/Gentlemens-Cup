@@ -26,6 +26,9 @@ code changes needed.
     "day1_scramble_points": { "Team Name": 0 },
     "day1_alt_shot_points": { "Team Name": 0 },
     "day2_skins_points": { "Team Name": 0 },
+    "golfer_skins": [
+      { "golfer": "Name", "team": "Team Name", "skins": 0 }
+    ],
     "overall_points": { "Team Name": 0 },
     "champion": "Team Name"
   },
@@ -41,6 +44,11 @@ Only `results.champion` and `results.overall_points` are required for a year
 to show up on the Champions summary table. `raw_data` is optional - it's kept
 around so the underlying hole-by-hole scores aren't lost even if the app's
 scoring logic changes in some future year.
+
+`results.golfer_skins` is optional per-golfer Day 2 skins (Day 1 is a team
+scramble/alt-shot and has no individual scores). When present, the History
+detail view shows an "Individual Skins" table. At season end, ask Claude to
+generate it from the `golfer` column now stamped on each `day2_scores` row.
 
 ## Adding this year's results at the end of the season
 
