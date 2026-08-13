@@ -52,6 +52,6 @@ generate it from the `golfer` column now stamped on each `day2_scores` row.
 
 ## Adding this year's results at the end of the season
 
-Ask Claude to pull the current season's data out of `tournament_data.db` (or
+Pull the current season's data out of `tournament_data.db` (or
 the CSV/DB backups downloaded from the app's sidebar) and write a new
 `<year>_results.json` file in this format.
