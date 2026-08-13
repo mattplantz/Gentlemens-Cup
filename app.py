@@ -1123,7 +1123,7 @@ FLAG_BLUE = "#0A3161"
 FLAG_RED = "#B31942"
 
 
-def _html_table(headers, rows, highlight_first_col=True):
+def _html_table(headers, rows, highlight_first_col=False):
     """Render a styled HTML table with an Old-Glory-blue header row.
 
     `rows` is a list of lists (already stringified). When highlight_first_col
@@ -1145,6 +1145,12 @@ def _html_table(headers, rows, highlight_first_col=True):
                 cells += (
                     f'<td style="padding:10px 14px;font-weight:700;color:#fff;'
                     f'background:{FLAG_BLUE};border:none;white-space:nowrap;">{display}</td>'
+                )
+            elif j == 0:
+                # First column: bold + dark for an index feel, no blue fill
+                cells += (
+                    f'<td style="padding:10px 14px;font-weight:700;color:{FLAG_BLUE};'
+                    f'background:{zebra};border:none;white-space:nowrap;">{display}</td>'
                 )
             else:
                 cells += (
