@@ -1110,8 +1110,21 @@ def load_history():
     return years
 
 
+def load_supreme_leaders():
+    """Load the Supreme Leaders head-to-head totals, if present."""
+    path = os.path.join(HISTORY_DIR, "supreme_leaders.json")
+    if not os.path.exists(path):
+        return None
+    try:
+        with open(path) as f:
+            return json.load(f)
+    except Exception as e:
+        st.warning(f"Couldn't read supreme_leaders.json: {e}")
+        return None
+
+
 def history_page():
-    """Browse past years' final results."""
+    """Browse past years' champions and the Supreme Leaders head-to-head."""
     st.title("📜 Tournament History")
 
     years_data = load_history()
@@ -1129,19 +1142,28 @@ def history_page():
     champ_rows = []
     for year in sorted_years:
         results = years_data[year].get('results', {})
+        leader = results.get('supreme_leader')
         champ_rows.append({
             'Year': year,
             'Champion': results.get('champion', '—'),
-            'Overall Points': ", ".join(
-                f"{team}: {pts}" for team, pts in results.get('overall_points', {}).items()
-            )
+            'Supreme Leader': f"Supreme Leader {leader}" if leader else '—',
         })
     st.dataframe(pd.DataFrame(champ_rows), use_container_width=True, hide_index=True)
 
+    # Supreme Leaders head-to-head
+    sl = load_supreme_leaders()
+    if sl and sl.get('head_to_head'):
+        st.markdown("### 👑 Supreme Leaders Head to Head")
+        h2h = sorted(sl['head_to_head'], key=lambda x: x.get('wins', 0), reverse=True)
+        df_h2h = pd.DataFrame(
+            [{'Name': entry.get('name', '—'), 'Total Wins': entry.get('wins', 0)} for entry in h2h]
+        )
+        st.dataframe(df_h2h, use_container_width=True, hide_index=True)
+
     st.divider()
 
-    # Full detail per year
-    selected_year = st.selectbox("View full results for:", sorted_years)
+    # Full detail per year (only shows what data exists for that year)
+    selected_year = st.selectbox("View details for:", sorted_years)
     year_data = years_data[selected_year]
     results = year_data.get('results', {})
     notes = year_data.get('format_notes', {})
@@ -1155,6 +1177,8 @@ def history_page():
                 st.caption(f"**Day 2:** {notes['day2']}")
 
     st.markdown(f"🏆 **Champion: {results.get('champion', '—')}**")
+    if results.get('supreme_leader'):
+        st.markdown(f"👑 **Supreme Leader {results['supreme_leader']}**")
 
     overall = results.get('overall_points', {})
     if overall:
@@ -1162,6 +1186,13 @@ def history_page():
             [{'Team': t, 'Overall Points': p} for t, p in overall.items()]
         ).sort_values('Overall Points', ascending=False)
         st.dataframe(df_overall, use_container_width=True, hide_index=True)
+
+    # Detailed scoring tables only exist for years with hole-by-hole data.
+    has_detail = any(results.get(k) for k in
+                     ['day1_scramble_points', 'day1_alt_shot_points', 'day2_skins_points'])
+    if not has_detail:
+        st.caption("Only the champion was recorded for this year — no hole-by-hole detail.")
+        return
 
     col1, col2 = st.columns(2)
     with col1:
