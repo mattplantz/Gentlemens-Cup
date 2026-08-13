@@ -899,6 +899,26 @@ def team_setup_page():
     _render_team_editor(current)
 
 
+def _render_one_team_day1(team):
+    """A single team's Round 1 role breakdown, presented for the reveal."""
+    rot = day1_rotation(team)
+    st.markdown(f"#### 🏌️ {team}")
+    st.markdown(f"🍺 **{SCRAMBLER_LABEL}:** {rot['scrambler'] or '—'}")
+    c1, c2 = st.columns(2)
+    with c1:
+        st.markdown(f"**Pair 1:** {' & '.join(rot['pair1']) or '—'}")
+    with c2:
+        st.markdown(f"**Pair 2:** {' & '.join(rot['pair2']) or '—'}")
+    st.caption(
+        f"Front 9 — scramble: {', '.join(rot['front_scramble']) or '—'}  ·  "
+        f"alt shot: {', '.join(rot['front_alt_shot']) or '—'}"
+    )
+    st.caption(
+        f"Back 9 — scramble: {', '.join(rot['back_scramble']) or '—'}  ·  "
+        f"alt shot: {', '.join(rot['back_alt_shot']) or '—'}"
+    )
+
+
 def _render_all_day1_roles():
     """Consolidated Round 1 role rotation for all teams, side by side."""
     st.markdown("### Round 1 Roles (all teams)")
@@ -930,8 +950,14 @@ def _render_all_skins_groups():
     st.dataframe(pd.DataFrame(rows), use_container_width=True, hide_index=True)
 
 
+# Reveal sequence: first Round 1, team by team in this order, then the 5
+# Round 2 skins groups one at a time.
+R1_REVEAL_ORDER = ["Young Guns", "Mids", "OGs"]
+_TOTAL_REVEAL_STEPS = len(R1_REVEAL_ORDER) + len(GROUPS)  # 3 teams + 5 groups = 8
+
+
 def grand_reveal_page():
-    """Commissioner-controlled grand reveal of all groupings, presented group by group."""
+    """Commissioner-controlled grand reveal: Round 1 team by team, then Round 2 groups one at a time."""
     st.title("🎭 The Grand Reveal")
 
     revealed = is_revealed()
@@ -953,7 +979,7 @@ def grand_reveal_page():
                 if st.button("🎉 REVEAL TO EVERYONE", type="primary", use_container_width=True):
                     if check_commissioner_code(code):
                         set_revealed(True)
-                        st.session_state.reveal_step = 0  # start the group-by-group walk
+                        st.session_state.reveal_step = 0  # start the stepped walk
                         st.session_state.pop('commish_preview', None)
                         st.balloons()
                         st.rerun()
@@ -977,9 +1003,9 @@ def grand_reveal_page():
             if st.button("Exit preview"):
                 st.session_state.pop('commish_preview', None)
                 st.rerun()
-            _render_all_skins_groups()
-            st.divider()
             _render_all_day1_roles()
+            st.divider()
+            _render_all_skins_groups()
             return
 
         st.info("🔒 The groupings are sealed. Waiting for the commissioner to reveal them Thursday night.")
@@ -988,50 +1014,69 @@ def grand_reveal_page():
         st.caption(f"{ready} of {len(TEAMS)} teams have entered assignments.")
         return
 
-    # --- Revealed: group-by-group presentation ---------------------------
-    st.markdown("### Round 2 Skins Groups")
-    st.caption("Each group has one golfer from every team going head-to-head for skins.")
-
+    # --- Revealed: stepped presentation ----------------------------------
     if 'reveal_step' not in st.session_state:
-        st.session_state.reveal_step = len(GROUPS)  # already fully revealed on revisit
+        st.session_state.reveal_step = _TOTAL_REVEAL_STEPS  # fully revealed on revisit
 
     step = st.session_state.reveal_step
+    n_teams = len(R1_REVEAL_ORDER)
 
+    # Navigation
     nav1, nav2, nav3 = st.columns([1, 1, 2])
     with nav1:
         if st.button("⬅️ Back", disabled=step <= 0):
             st.session_state.reveal_step = max(0, step - 1)
             st.rerun()
     with nav2:
-        if st.button("Reveal next ➡️", disabled=step >= len(GROUPS), type="primary"):
-            st.session_state.reveal_step = min(len(GROUPS), step + 1)
+        next_label = "Reveal next ➡️"
+        if step < n_teams:
+            next_label = f"Reveal {R1_REVEAL_ORDER[step]} ➡️"
+        elif step < _TOTAL_REVEAL_STEPS:
+            next_label = f"Reveal Group {GROUPS[step - n_teams]} ➡️"
+        if st.button(next_label, disabled=step >= _TOTAL_REVEAL_STEPS, type="primary"):
+            st.session_state.reveal_step = min(_TOTAL_REVEAL_STEPS, step + 1)
             st.rerun()
     with nav3:
         if st.button("Show all"):
-            st.session_state.reveal_step = len(GROUPS)
+            st.session_state.reveal_step = _TOTAL_REVEAL_STEPS
             st.rerun()
 
-    st.progress(step / len(GROUPS), text=f"{step} / {len(GROUPS)} groups revealed")
+    st.progress(step / _TOTAL_REVEAL_STEPS,
+                text=f"{step} / {_TOTAL_REVEAL_STEPS} revealed")
 
-    # Show the first `step` groups
-    for g in GROUPS[:step]:
-        st.markdown(f"#### 🏌️ Group {g}")
-        cols = st.columns(len(TEAMS))
-        for col, team in zip(cols, TEAMS):
-            golfer = get_golfer_for_team_group(team, g)
-            with col:
-                st.markdown(f"**{team}**")
-                st.markdown(f"### {golfer or '—'}")
+    # ---- Phase 1: Round 1 roles, team by team --------------------------
+    st.markdown("### Round 1 — Scramble / Alt Shot Roles")
+    teams_shown = min(step, n_teams)
+    if teams_shown == 0:
+        st.caption("First up: Round 1 roles, one team at a time.")
+    for team in R1_REVEAL_ORDER[:teams_shown]:
+        _render_one_team_day1(team)
+    if teams_shown < n_teams:
+        remaining = n_teams - teams_shown
+        st.info(f"👀 {remaining} team(s) still hidden — hit **{next_label}** to keep going.")
 
-    if step < len(GROUPS):
-        st.info(f"👀 {len(GROUPS) - step} group(s) still hidden - hit **Reveal next** to continue the suspense.")
-
-    # --- Once all groups are out, show the consolidated views ------------
-    if step >= len(GROUPS):
+    # ---- Phase 2: Round 2 skins groups, one at a time ------------------
+    if step >= n_teams:
         st.divider()
+        st.markdown("### Round 2 — Skins Groups")
+        st.caption("Each group has one golfer from every team going head-to-head for skins.")
+        groups_shown = step - n_teams
+        for g in GROUPS[:groups_shown]:
+            st.markdown(f"#### 🏌️ Group {g}")
+            cols = st.columns(len(TEAMS))
+            for col, team in zip(cols, TEAMS):
+                golfer = get_golfer_for_team_group(team, g)
+                with col:
+                    st.markdown(f"**{team}**")
+                    st.markdown(f"### {golfer or '—'}")
+        if groups_shown < len(GROUPS):
+            st.info(f"👀 {len(GROUPS) - groups_shown} group(s) still hidden — hit **{next_label}** to continue the suspense.")
+
+    # ---- Everything out: consolidated recap ----------------------------
+    if step >= _TOTAL_REVEAL_STEPS:
+        st.divider()
+        st.success("🎉 That's everyone!")
         _render_all_skins_groups()
-        st.divider()
-        _render_all_day1_roles()
 
 
 # ---------------------------------------------------------------------------
